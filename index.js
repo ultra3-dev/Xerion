@@ -243,28 +243,40 @@ pool.on('error', (err) => {
   console.error('[Xerion][DB] Error inesperado en el pool de Postgres:', err.message);
 });
 
+// Columnas de xerion_users fuera de la definición de la tabla, para poder
+// añadirlas con ALTER TABLE ... ADD COLUMN IF NOT EXISTS en initDatabase().
+// Esto hace que el arranque se autorepare si la tabla ya existía de antes
+// (por ejemplo, de una versión anterior del proyecto en la misma base de
+// datos) con menos columnas de las que este bot necesita — en vez de dejar
+// la tabla a medias y romper cada query que toque una columna nueva.
+const XERION_USERS_COLUMNS = [
+  ['feathers', 'INTEGER NOT NULL DEFAULT 0'],
+  ['total_feathers_earned', 'INTEGER NOT NULL DEFAULT 0'],
+  ['chests_participated', 'INTEGER NOT NULL DEFAULT 0'],
+  ['chests_won', 'INTEGER NOT NULL DEFAULT 0'],
+  ['aura_infinite_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['king_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['arise_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['created_at', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()'],
+];
+
 async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_users (
-      user_id TEXT PRIMARY KEY,
-      feathers INTEGER NOT NULL DEFAULT 0,
-      total_feathers_earned INTEGER NOT NULL DEFAULT 0,
-      chests_participated INTEGER NOT NULL DEFAULT 0,
-      chests_won INTEGER NOT NULL DEFAULT 0,
-      aura_infinite_count INTEGER NOT NULL DEFAULT 0,
-      king_count INTEGER NOT NULL DEFAULT 0,
-      arise_count INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      user_id TEXT PRIMARY KEY
     );
   `);
 
+  for (const [name, definition] of XERION_USERS_COLUMNS) {
+    await pool.query(`ALTER TABLE xerion_users ADD COLUMN IF NOT EXISTS ${name} ${definition};`);
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_state (
-      id SMALLINT PRIMARY KEY DEFAULT 1,
-      message_counter INTEGER NOT NULL DEFAULT 0,
-      CONSTRAINT xerion_state_singleton CHECK (id = 1)
+      id SMALLINT PRIMARY KEY DEFAULT 1
     );
   `);
+  await pool.query(`ALTER TABLE xerion_state ADD COLUMN IF NOT EXISTS message_counter INTEGER NOT NULL DEFAULT 0;`);
 
   await pool.query(`
     INSERT INTO xerion_state (id, message_counter)
@@ -272,7 +284,7 @@ async function initDatabase() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  console.log('[Xerion][DB] Esquema listo.');
+  console.log('[Xerion][DB] Esquema listo (columnas verificadas/creadas si faltaban).');
 }
 
 async function ensureUser(userId) {
