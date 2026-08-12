@@ -76,8 +76,9 @@ async function initDatabase() {
     await pool.query(`ALTER TABLE xerion_state ADD COLUMN IF NOT EXISTS ${name} ${definition};`);
   }
   await pool.query(`
-    INSERT INTO xerion_state (id) VALUES (1)
-    ON CONFLICT (id) DO NOTHING;
+    INSERT INTO xerion_state (id)
+    SELECT 1
+    WHERE NOT EXISTS (SELECT 1 FROM xerion_state WHERE id = 1);
   `);
 
   await pool.query(`
@@ -98,6 +99,22 @@ async function initDatabase() {
     );
   `);
 
+  // Versiones antiguas podían tener las columnas correctas sin una
+  // restricción UNIQUE. La migración nunca borra datos; si hay duplicados,
+  // se deja constancia y el código usa la ruta compatible de abajo.
+  for (const [indexName, tableName, columnName] of [
+    ['xerion_users_user_id_unique', 'xerion_users', 'user_id'],
+    ['xerion_state_id_unique', 'xerion_state', 'id'],
+    ['xerion_notifications_user_id_unique', 'xerion_notifications', 'user_id'],
+    ['xerion_chest_awards_chest_id_unique', 'xerion_chest_awards', 'chest_id'],
+  ]) {
+    try {
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName} ON ${tableName} (${columnName});`);
+    } catch (err) {
+      console.error(`[Xerion][DB] No se pudo verificar el índice ${indexName}; se conserva la información existente:`, err.message);
+    }
+  }
+
   console.log('[Xerion][DB] Esquema listo (columnas verificadas/creadas si faltaban).');
 }
 
@@ -107,7 +124,9 @@ async function initDatabase() {
 
 async function ensureUser(userId) {
   await pool.query(
-    `INSERT INTO xerion_users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING;`,
+    `INSERT INTO xerion_users (user_id)
+     SELECT $1
+     WHERE NOT EXISTS (SELECT 1 FROM xerion_users WHERE user_id = $1);`,
     [userId],
   );
 }
@@ -155,21 +174,28 @@ async function settleChestReward(chestId, userId, reward) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(
-      `INSERT INTO xerion_chest_awards (chest_id, user_id, reward_key, reward_amount)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (chest_id) DO NOTHING
-       RETURNING chest_id;`,
-      [chestId, userId, reward.key, reward.amount || 0],
+    // Bloqueo transaccional por cofre: conserva la idempotencia aunque una
+    // base antigua aún no tenga el índice UNIQUE.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1));`, [String(chestId)]);
+    const { rows: existingAwards } = await client.query(
+      `SELECT chest_id FROM xerion_chest_awards WHERE chest_id = $1 LIMIT 1;`,
+      [chestId],
     );
 
-    if (rows.length === 0) {
+    if (existingAwards.length > 0) {
       await client.query('COMMIT');
       return false;
     }
 
     await client.query(
-      `INSERT INTO xerion_users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING;`,
+      `INSERT INTO xerion_chest_awards (chest_id, user_id, reward_key, reward_amount)
+       VALUES ($1, $2, $3, $4);`,
+      [chestId, userId, reward.key, reward.amount || 0],
+    );
+    await client.query(
+      `INSERT INTO xerion_users (user_id)
+       SELECT $1
+       WHERE NOT EXISTS (SELECT 1 FROM xerion_users WHERE user_id = $1);`,
       [userId],
     );
 
@@ -317,12 +343,20 @@ async function getNotificationEnabled(userId) {
 }
 
 async function setNotificationEnabled(userId, enabled) {
-  await pool.query(
-    `INSERT INTO xerion_notifications (user_id, enabled, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET enabled = $2, updated_at = NOW();`,
+  const { rowCount } = await pool.query(
+    `UPDATE xerion_notifications
+     SET enabled = $2, updated_at = NOW()
+     WHERE user_id = $1;`,
     [userId, enabled],
   );
+  if (rowCount === 0) {
+    await pool.query(
+      `INSERT INTO xerion_notifications (user_id, enabled, updated_at)
+       SELECT $1, $2, NOW()
+       WHERE NOT EXISTS (SELECT 1 FROM xerion_notifications WHERE user_id = $1);`,
+      [userId, enabled],
+    );
+  }
   return enabled;
 }
 
