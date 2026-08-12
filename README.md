@@ -1,10 +1,10 @@
-# Xerion v1.0
+# Xerion v1.6.9
 
 Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Hecho con **discord.js v14 (Components V2)**, **Express** y **PostgreSQL (Neon)**.
 
 ## Cómo funciona
 
-1. Cada 10 mensajes en el canal configurado, hay 0.3% de probabilidad de que aparezca un cofre (o se puede forzar con `/spawn`, solo para el dueño configurado).
+1. En el canal configurado la probabilidad empieza en 0% y sube 1% por cada 100 mensajes sin cofre. El contador es exclusivo de ese canal y se conserva en PostgreSQL.
 2. Todos pulsan **Participate**. Tienen 5 minutos.
 3. Cuando el tiempo se acaba, empieza la eliminación: uno por uno (o por lotes si hay mucha gente), narrada mensaje por mensaje, hasta que queda un solo sobreviviente.
 4. El sobreviviente pulsa **Open**: animación de ruleta con canvas y un resultado — un rol exclusivo, algo de la moneda del bot (Feathers 🐦‍🔥), o nada.
@@ -79,5 +79,5 @@ La página principal (`/`) es la web informativa — solo información sobre el 
 
 ## Comandos
 
-**Slash:** `/spawn` (solo dueño), `/profile [usuario]`, `/leaderboard`, `/rates`, `/help`
-**Prefijo (`xn`):** `xn inv`, `xn top`, `xn help`
+**Slash:** `/spawn` (solo dueño), `/profile [usuario]`, `/inventory`, `/leaderboard`, `/rates`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/rank`, `/rewards`, `/streak`, `/ping`, `/about`, `/rules`
+**Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn rango` y `xn reglas`.

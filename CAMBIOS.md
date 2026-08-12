@@ -1,16 +1,16 @@
-# Xerion v1.5.0 — Qué cambió
+# Xerion v1.6.9 — Qué cambió
 
 ## Estructura (5 archivos, como pediste)
 
 - **config.js** — CONFIG del servidor, los 3 tipos de cofre y sus tablas de recompensa, la tienda, y utilidades puras.
 - **database.js** — todo Postgres/Neon. Esquema 100% aditivo (`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`) — tu base de datos actual se autorepara al arrancar, nunca se borra nada.
-- **visuals.js** — el motor de canvas y **todos** los embeds/paneles Components V2.
-- **game.js** — spawns, batalla de eliminación, tienda, notificaciones, y los 9 comandos (slash + prefix).
+- **visuals.js** — el motor de canvas y **todos** los paneles Components V2.
+- **game.js** — spawns, batalla de eliminación, tienda, notificaciones, y los 20 comandos (slash + prefix).
 - **index.js** — cliente de Discord, la página web informativa, y el arranque.
 
 Reemplaza tu `index.js` actual por estos 5 archivos (mismo `package.json`, actualicé solo la versión — no necesitas instalar nada nuevo).
 
-## Los 9 comandos (slash + `xn ...`, tú decidiste el número dentro de tu tope de 20)
+## Los 20 comandos (slash + `xn ...`)
 
 | Comando | Prefix | Qué hace |
 |---|---|---|
@@ -28,14 +28,15 @@ Reemplaza tu `index.js` actual por estos 5 archivos (mismo `package.json`, actua
 
 - **Las plumas ahora sirven para algo** → `/shop`: **Escudo de Xerion** (🛡️ 40 plumas, te salva de la ronda 1 de eliminación) y **Amuleto de Suerte** (🍀 60 plumas, +50% probabilidad de rol en tu próxima apertura). Ambos se consumen al usarse.
 - **3 tipos de cofre** (inventé los nombres): 🩶 Cofre de Ceniza (común), 🔥 Cofre de Brasa (raro), 🌑 Cofre del Abismo (legendario). Cada uno con su propia tabla de probabilidad — **incluso el Abismo sigue siendo mayormente "Nothing"**, el sistema es difícil a propósito.
-- **Probabilidad dinámica**: empieza en 2% y sube +10% cada 20 mensajes sin cofre, hasta 95% tope. Se guarda en Postgres, sobrevive reinicios.
-- **Embed del cofre con 10 estadísticas** exactas (tipo, mejor recompensa, rango de plumas, % de nada, cierre, participantes, cofres abiertos del server, última aparición, mensajes procesados, y un tip sobre la tienda).
+- **Probabilidad dinámica v1.6.9**: empieza en 0% y sube +1% cada 100 mensajes del canal de cofres, hasta 100%. Cada canal tiene su propio contador persistente.
+- **Panel Components V2 del cofre** con estadísticas en tiempo real (tipo, mejor recompensa, rango de plumas, % de nada, cierre, participantes, cofres abiertos del canal, última aparición, mensajes procesados, probabilidad siguiente y tip de tienda).
 - **Sin ping al usar comandos**: todo pasa por `allowedMentions` suprimidos por defecto (`parse: []`) + `repliedUser: false` en prefix.
 - **Ping real al eliminar y al ganador**: las líneas de eliminación y el anuncio del ganador ahora sí traen la mención en el `content` del mensaje (los mentions dentro de un *embed* nunca pingan en Discord — por eso antes probablemente no pingaban de verdad).
 - **`/notification`**: panel con botón activar/desactivar; cuando aparece un cofre (automático o forzado), se manda un DM a todos los que lo activaron.
 - **Clear de slash commands**: en cada arranque, el bot borra TODOS los comandos globales y del guild configurado antes de re-registrar solo estos 9 — así no quedan comandos clonados de proyectos anteriores.
-- **Nunca resets**: esquema aditivo, y absolutamente todo lo que toca Discord o la base de datos está en `try/catch` — un error nunca tumba el proceso ni pide reiniciar nada.
-- **Components V2 + Markdown de Discord** en todos los paneles de información (encabezados, subtexto, blockquotes, código, timestamps). El flujo del cofre usa embeds clásicos a propósito (es lo que Discord permite editar rápido y sin que las menciones pinguen accidentalmente).
+- **Nunca resets**: esquema aditivo, y absolutamente todo lo que toca Discord o la base de datos está en `try/catch` — un error nunca tumba el proceso ni pide reiniciar nada. Los cofres activos se guardan por canal.
+- **Components V2 + Markdown de Discord** en todos los paneles, incluido el flujo completo del cofre. Las estadísticas del cofre se editan inmediatamente al entrar un participante.
+- **Top 100**: ranking paginado de 10 en 10 con botones; resuelve nombres desde Discord y nunca muestra `unknown-user`.
 
 ## Sobre los "comandos que no funcionaban"
 

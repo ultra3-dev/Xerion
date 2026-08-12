@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.5.0 — config.js
+ *  XERION v1.6.9 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.5.0',
+  VERSION: '1.6.9',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -34,27 +34,23 @@ const CONFIG = {
   },
 
   // ----------------------------------------------------------------------
-  // Probabilidad DINÁMICA de aparición. Empieza baja y sube
-  // PROBABILITY_STEP_INCREASE (10 puntos porcentuales) cada
-  // PROBABILITY_STEP_MESSAGES (20) mensajes seguidos sin que aparezca un
-  // cofre, hasta un tope de MAX_SPAWN_CHANCE. El contador vive en Postgres
-  // (xerion_state.messages_since_chest) y se resetea a 0 en cuanto aparece
-  // un cofre — automático o forzado con /spawn — así que sobrevive a
-  // reinicios del bot sin perderse.
+  // Probabilidad DINÁMICA por canal. Empieza en 0% y sube 1 punto porcentual
+  // por cada 100 mensajes sin cofre, hasta 100%. Los contadores viven en
+  // Postgres por canal y se resetean únicamente cuando aparece un cofre.
   // ----------------------------------------------------------------------
-  BASE_SPAWN_CHANCE: 0.02,
-  PROBABILITY_STEP_MESSAGES: 20,
-  PROBABILITY_STEP_INCREASE: 0.10,
-  MAX_SPAWN_CHANCE: 0.95,
+  BASE_SPAWN_CHANCE: 0,
+  PROBABILITY_STEP_MESSAGES: 100,
+  PROBABILITY_STEP_INCREASE: 0.01,
+  MAX_SPAWN_CHANCE: 1,
 
   JOIN_WINDOW_MS: 5 * 60 * 1000, // 5 minutos para pulsar "Participate"
 
   // Ritmo del minijuego de eliminación
   // La animación conserva ritmo, pero las acciones del usuario no esperan
   // pausas artificiales largas.
-  INTRO_DELAY_MS: 1_200,
-  ELIMINATION_DELAY_MIN_MS: 850,
-  ELIMINATION_DELAY_MAX_MS: 1_400,
+  INTRO_DELAY_MS: 250,
+  ELIMINATION_DELAY_MIN_MS: 350,
+  ELIMINATION_DELAY_MAX_MS: 650,
   BATCH_THRESHOLD: 10,
   BATCH_FRACTION: 0.25,
 

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.5.0 — database.js
+ *  XERION v1.6.9 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -32,6 +32,8 @@ pool.on('error', (err) => {
 // Columnas de xerion_users fuera de la definición de la tabla, para poder
 // añadirlas con ALTER TABLE ... ADD COLUMN IF NOT EXISTS en initDatabase().
 const XERION_USERS_COLUMNS = [
+  ['username', 'TEXT'],
+  ['display_name', 'TEXT'],
   ['feathers', 'INTEGER NOT NULL DEFAULT 0'],
   ['total_feathers_earned', 'INTEGER NOT NULL DEFAULT 0'],
   ['total_feathers_spent', 'INTEGER NOT NULL DEFAULT 0'],
@@ -42,6 +44,8 @@ const XERION_USERS_COLUMNS = [
   ['arise_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['shields', 'INTEGER NOT NULL DEFAULT 0'],
   ['luck_charms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['last_daily_claim_at', 'TIMESTAMPTZ'],
+  ['daily_claims', 'INTEGER NOT NULL DEFAULT 0'],
   ['created_at', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()'],
 ];
 
@@ -80,6 +84,42 @@ async function initDatabase() {
     SELECT 1
     WHERE NOT EXISTS (SELECT 1 FROM xerion_state WHERE id = 1);
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS xerion_channel_state (
+      channel_id TEXT PRIMARY KEY,
+      message_counter INTEGER NOT NULL DEFAULT 0,
+      messages_since_chest INTEGER NOT NULL DEFAULT 0,
+      chests_spawned_total INTEGER NOT NULL DEFAULT 0,
+      chests_opened_total INTEGER NOT NULL DEFAULT 0,
+      last_chest_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(
+    `INSERT INTO xerion_channel_state
+       (channel_id, message_counter, messages_since_chest, chests_spawned_total, chests_opened_total, last_chest_at)
+     SELECT $1, message_counter, messages_since_chest, chests_spawned_total, chests_opened_total, last_chest_at
+     FROM xerion_state
+     WHERE id = 1
+     ON CONFLICT (channel_id) DO NOTHING;`,
+    [CONFIG.CHEST_CHANNEL_ID],
+  );
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS xerion_active_chests (
+      channel_id TEXT PRIMARY KEY,
+      snapshot JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `INSERT INTO xerion_active_chests (channel_id, snapshot, updated_at)
+     SELECT COALESCE(active_chest->>'channelId', $1), active_chest, COALESCE(active_chest_updated_at, NOW())
+     FROM xerion_state
+     WHERE id = 1 AND active_chest IS NOT NULL
+     ON CONFLICT (channel_id) DO NOTHING;`,
+    [CONFIG.CHEST_CHANNEL_ID],
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_notifications (
@@ -122,12 +162,14 @@ async function initDatabase() {
 // USUARIOS
 // ============================================================================
 
-async function ensureUser(userId) {
+async function ensureUser(userId, identity = {}) {
   await pool.query(
-    `INSERT INTO xerion_users (user_id)
-     SELECT $1
-     WHERE NOT EXISTS (SELECT 1 FROM xerion_users WHERE user_id = $1);`,
-    [userId],
+    `INSERT INTO xerion_users (user_id, username, display_name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET
+       username = COALESCE(NULLIF(EXCLUDED.username, ''), xerion_users.username),
+       display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), xerion_users.display_name);`,
+    [userId, identity.username || null, identity.displayName || null],
   );
 }
 
@@ -170,7 +212,7 @@ async function applyRewardToUser(userId, reward) {
  * evita duplicados si el proceso cae entre el premio y el mensaje final.
  * La tabla es nueva y aditiva: nunca se borra ni se reinicia.
  */
-async function settleChestReward(chestId, userId, reward) {
+async function settleChestReward(chestId, userId, reward, channelId = null) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -218,6 +260,14 @@ async function settleChestReward(chestId, userId, reward) {
     }
 
     await client.query(`UPDATE xerion_state SET chests_opened_total = chests_opened_total + 1 WHERE id = 1;`);
+    if (channelId) {
+      await client.query(
+        `UPDATE xerion_channel_state
+         SET chests_opened_total = chests_opened_total + 1
+         WHERE channel_id = $1;`,
+        [channelId],
+      );
+    }
     await client.query('COMMIT');
     return true;
   } catch (err) {
@@ -228,8 +278,8 @@ async function settleChestReward(chestId, userId, reward) {
   }
 }
 
-async function getUserStats(userId) {
-  await ensureUser(userId);
+async function getUserStats(userId, identity = {}) {
+  await ensureUser(userId, identity);
   const { rows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
   const user = rows[0];
 
@@ -237,14 +287,26 @@ async function getUserStats(userId) {
     `SELECT COUNT(*) + 1 AS rank FROM xerion_users WHERE feathers > $1;`,
     [user.feathers],
   );
+  const { rows: nextRows } = await pool.query(
+    `SELECT MIN(feathers) AS next_feathers FROM xerion_users WHERE feathers > $1;`,
+    [user.feathers],
+  );
   const { rows: totalRows } = await pool.query(`SELECT COUNT(*) AS total FROM xerion_users;`);
 
-  return { ...user, rank: Number(rankRows[0].rank), totalPlayers: Number(totalRows[0].total) };
+  return {
+    ...user,
+    rank: Number(rankRows[0].rank),
+    totalPlayers: Number(totalRows[0].total),
+    nextRankFeathers: nextRows[0].next_feathers ? Number(nextRows[0].next_feathers) - Number(user.feathers) : 0,
+  };
 }
 
 async function getLeaderboard(limit = 10) {
   const { rows } = await pool.query(
-    `SELECT user_id, feathers FROM xerion_users ORDER BY feathers DESC, user_id ASC LIMIT $1;`,
+    `SELECT user_id, username, display_name, feathers
+     FROM xerion_users
+     ORDER BY feathers DESC, user_id ASC
+     LIMIT $1;`,
     [limit],
   );
   return rows;
@@ -255,17 +317,36 @@ async function getLeaderboard(limit = 10) {
 // ============================================================================
 
 /** Incrementa el contador histórico total de mensajes (solo estadística). */
-async function incrementMessageCounter() {
+async function ensureChannel(channelId) {
+  await pool.query(
+    `INSERT INTO xerion_channel_state (channel_id)
+     VALUES ($1)
+     ON CONFLICT (channel_id) DO NOTHING;`,
+    [channelId],
+  );
+}
+
+async function incrementMessageCounter(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  await ensureChannel(channelId);
   const { rows } = await pool.query(
-    `UPDATE xerion_state SET message_counter = message_counter + 1 WHERE id = 1 RETURNING message_counter;`,
+    `UPDATE xerion_channel_state
+     SET message_counter = message_counter + 1
+     WHERE channel_id = $1
+     RETURNING message_counter;`,
+    [channelId],
   );
   return rows[0].message_counter;
 }
 
 /** Incrementa el contador de mensajes desde el último cofre — esto es lo que alimenta la probabilidad dinámica. */
-async function incrementMessagesSinceChest() {
+async function incrementMessagesSinceChest(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  await ensureChannel(channelId);
   const { rows } = await pool.query(
-    `UPDATE xerion_state SET messages_since_chest = messages_since_chest + 1 WHERE id = 1 RETURNING messages_since_chest;`,
+    `UPDATE xerion_channel_state
+     SET messages_since_chest = messages_since_chest + 1
+     WHERE channel_id = $1
+     RETURNING messages_since_chest;`,
+    [channelId],
   );
   return rows[0].messages_since_chest;
 }
@@ -277,25 +358,29 @@ async function incrementMessagesSinceChest() {
  * último cofre. Devuelve el estado ANTERIOR (antes de resetear) para poder
  * mostrar "última aparición" en el embed del cofre nuevo.
  */
-async function recordChestSpawn() {
-  const { rows: beforeRows } = await pool.query(`SELECT * FROM xerion_state WHERE id = 1;`);
+async function recordChestSpawn(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  await ensureChannel(channelId);
+  const { rows: beforeRows } = await pool.query(`SELECT * FROM xerion_channel_state WHERE channel_id = $1;`, [channelId]);
   const before = beforeRows[0];
 
   await pool.query(
-    `UPDATE xerion_state
+    `UPDATE xerion_channel_state
      SET messages_since_chest = 0, chests_spawned_total = chests_spawned_total + 1, last_chest_at = NOW()
-     WHERE id = 1;`,
+     WHERE channel_id = $1;`,
+    [channelId],
   );
 
   return before;
 }
 
-async function recordChestOpened() {
-  await pool.query(`UPDATE xerion_state SET chests_opened_total = chests_opened_total + 1 WHERE id = 1;`);
+async function recordChestOpened(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  await ensureChannel(channelId);
+  await pool.query(`UPDATE xerion_channel_state SET chests_opened_total = chests_opened_total + 1 WHERE channel_id = $1;`, [channelId]);
 }
 
-async function getState() {
-  const { rows } = await pool.query(`SELECT * FROM xerion_state WHERE id = 1;`);
+async function getState(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  await ensureChannel(channelId);
+  const { rows } = await pool.query(`SELECT * FROM xerion_channel_state WHERE channel_id = $1;`, [channelId]);
   return rows[0];
 }
 
@@ -304,25 +389,30 @@ async function getActiveChest() {
   return rows[0]?.active_chest || null;
 }
 
-async function saveActiveChest(snapshot) {
+async function saveActiveChest(channelId, snapshot) {
   await pool.query(
-    `UPDATE xerion_state
-     SET active_chest = $1::jsonb, active_chest_updated_at = NOW()
-     WHERE id = 1;`,
-    [JSON.stringify(snapshot)],
+    `INSERT INTO xerion_active_chests (channel_id, snapshot, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (channel_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW();`,
+    [channelId, JSON.stringify(snapshot)],
   );
 }
 
-async function clearActiveChest() {
-  await pool.query(
-    `UPDATE xerion_state
-     SET active_chest = NULL, active_chest_updated_at = NOW()
-     WHERE id = 1;`,
-  );
+async function clearActiveChest(channelId) {
+  if (channelId) {
+    await pool.query(`DELETE FROM xerion_active_chests WHERE channel_id = $1;`, [channelId]);
+    return;
+  }
+  await pool.query(`DELETE FROM xerion_active_chests;`);
 }
 
-async function getServerStats() {
-  const state = await getState();
+async function getActiveChests() {
+  const { rows } = await pool.query(`SELECT channel_id, snapshot FROM xerion_active_chests;`);
+  return rows;
+}
+
+async function getServerStats(channelId = CONFIG.CHEST_CHANNEL_ID) {
+  const state = await getState(channelId);
   const { rows } = await pool.query(
     `SELECT COUNT(*) AS players, COALESCE(SUM(feathers), 0) AS total_feathers FROM xerion_users;`,
   );
@@ -426,6 +516,39 @@ async function consumeLuckCharmIfAvailable(userId) {
   return rowCount > 0;
 }
 
+async function claimDaily(userId, identity = {}) {
+  await ensureUser(userId, identity);
+  const { rows } = await pool.query(
+    `UPDATE xerion_users
+     SET feathers = feathers + 25,
+         total_feathers_earned = total_feathers_earned + 25,
+         daily_claims = daily_claims + 1,
+         last_daily_claim_at = NOW()
+     WHERE user_id = $1
+       AND (last_daily_claim_at IS NULL OR last_daily_claim_at <= NOW() - INTERVAL '24 hours')
+     RETURNING feathers, daily_claims, last_daily_claim_at;`,
+    [userId],
+  );
+  if (rows[0]) return { claimed: true, reward: 25, ...rows[0] };
+  const { rows: current } = await pool.query(
+    `SELECT feathers, daily_claims, last_daily_claim_at FROM xerion_users WHERE user_id = $1;`,
+    [userId],
+  );
+  return { claimed: false, reward: 0, ...current[0] };
+}
+
+async function getRecentAwards(userId, limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT reward_key, reward_amount, created_at
+     FROM xerion_chest_awards
+     WHERE user_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2;`,
+    [userId, limit],
+  );
+  return rows;
+}
+
 module.exports = {
   pool,
   initDatabase,
@@ -436,12 +559,14 @@ module.exports = {
   settleChestReward,
   getUserStats,
   getLeaderboard,
+  ensureChannel,
   incrementMessageCounter,
   incrementMessagesSinceChest,
   recordChestSpawn,
   recordChestOpened,
   getState,
   getActiveChest,
+  getActiveChests,
   saveActiveChest,
   clearActiveChest,
   getServerStats,
@@ -454,4 +579,6 @@ module.exports = {
   getShieldCounts,
   consumeShields,
   consumeLuckCharmIfAvailable,
+  claimDaily,
+  getRecentAwards,
 };

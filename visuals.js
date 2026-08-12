@@ -1,20 +1,10 @@
 /**
  * ============================================================================
- *  XERION v1.5.0 — visuals.js
+ *  XERION v1.6.9 — visuals.js
  * ----------------------------------------------------------------------------
- *  Toda la capa de diseño vive aquí. Discord no permite mezclar `embeds`
- *  clásicos con Components V2 en el mismo mensaje:
- *
- *  - El flujo del cofre (aparición → eliminación → apertura) usa EMBEDS
- *    CLÁSICOS + botones — se edita muchas veces en poco tiempo y los embeds
- *    son más predecibles para eso, además de que un mention dentro de un
- *    embed NUNCA pinga a nadie (a diferencia de Components V2), lo cual nos
- *    conviene para casi todo ese flujo.
- *  - Los paneles de información (perfil, inventario, leaderboard, rates,
- *    tienda, notificaciones, stats, help) usan COMPONENTS V2 real
- *    (Container, Section, TextDisplay, Separator, ActionRow) con Markdown
- *    completo de Discord: encabezados, subtexto, blockquotes, listas,
- *    timestamps, código.
+ *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
+ *  los paneles comparten Containers, TextDisplay, Separators y botones para
+ *  que las estadísticas se puedan editar sin cambiar de formato de mensaje.
  * ============================================================================
  */
 
@@ -31,6 +21,8 @@ const {
   SeparatorBuilder,
   SeparatorSpacingSize,
   AttachmentBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
 } = require('discord.js');
 const { createCanvas } = require('@napi-rs/canvas');
 
@@ -199,8 +191,7 @@ function spinFrameAttachment(table, tierColor, forcedResult = null, name = 'spin
 }
 
 // ============================================================================
-// EMBEDS CLÁSICOS — flujo del cofre (aparición, eliminación, apertura).
-// Los mentions dentro de un embed NUNCA pingan — es intencional aquí.
+// COMPONENTS V2 — flujo del cofre (aparición, eliminación, apertura).
 // ============================================================================
 
 function buildRewardsFieldValue(table) {
@@ -213,42 +204,55 @@ function buildRewardsFieldValue(table) {
     .join('\n');
 }
 
-/** Embed de aparición del cofre — exactamente 10 estadísticas, como se pidió. */
-function buildChestEmbed({ chestType, participantCount, endsAt, serverStats }) {
+/** Panel de aparición del cofre con estadísticas editables en tiempo real. */
+function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false }) {
   const table = chestType.rewardTable;
   const arise = table.find((r) => r.key === 'ARISE');
   const feathers = table.find((r) => r.key === 'FEATHERS');
   const nothing = table.find((r) => r.key === 'NOTHING');
+  const chance = computeSpawnChance(serverStats.messages_since_chest || 0);
+  const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest || 0);
 
-  return new EmbedBuilder()
-    .setColor(chestType.color)
-    .setTitle(`${chestType.emoji} Ha aparecido un ${chestType.name}`)
-    .setDescription(
-      [
-        `**${chestType.tierLabel}** — ${chestType.flavor}`,
-        '',
-        'Nadie sabe qué guarda por dentro hasta que alguien lo abre — y solo una persona tendrá esa oportunidad.',
-        '',
-        'Press **Participate** to enter. Cuando el tiempo se agote, el juego empieza.',
-      ].join('\n'),
+  return new ContainerBuilder()
+    .setAccentColor(chestType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `# ${chestType.emoji} Ha aparecido un ${chestType.name}`,
+          `-# ${chestType.tierLabel} · Xerion v${CONFIG.VERSION}`,
+          '',
+          `> ${chestType.flavor}`,
+          '',
+          'Nadie sabe qué guarda por dentro hasta que alguien lo abre — y solo una persona tendrá esa oportunidad.',
+        ].join('\n'),
+      ),
     )
-    .addFields(
-      { name: `${chestType.emoji} Tipo de Cofre`, value: `**${chestType.name}**\n\`${chestType.tierLabel}\``, inline: true },
-      { name: '🏆 Mejor Recompensa', value: `${arise.emoji} ${arise.label} — \`${arise.chance}%\``, inline: true },
-      { name: `${FEATHER_EMOJI} Plumas en juego`, value: `\`${formatFeatherRange(feathers)}\` si no sale un rol`, inline: true },
-      { name: '📉 Probabilidad de nada', value: `\`${nothing.chance}%\``, inline: true },
-      { name: '⏳ Cierra', value: `<t:${Math.floor(endsAt / 1000)}:R>`, inline: true },
-      { name: '👥 Participantes', value: `${participantCount}`, inline: true },
-      { name: '🗃️ Cofres abiertos (server)', value: formatNumber(serverStats.chests_opened_total), inline: true },
-      {
-        name: '🕰️ Última aparición',
-        value: serverStats.last_chest_at ? `<t:${toUnixSeconds(serverStats.last_chest_at)}:R>` : 'Es el primero de la historia',
-        inline: true,
-      },
-      { name: '💬 Mensajes procesados', value: formatNumber(serverStats.message_counter), inline: true },
-      { name: '🛡️ Consejo', value: 'Un **Escudo** o un **Amuleto** de `/shop` pueden salvarte.', inline: true },
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `**${chestType.emoji} Tipo:** ${chestType.name} · \`${chestType.tierLabel}\``,
+          `**🏆 Mejor recompensa:** ${arise.emoji} ${arise.label} · \`${arise.chance}%\``,
+          `**${FEATHER_EMOJI} Feathers:** \`${formatFeatherRange(feathers)}\` si no sale un rol`,
+          `**📉 Nada:** \`${nothing.chance}%\``,
+          `**⏳ Cierra:** <t:${Math.floor(endsAt / 1000)}:R>`,
+          `**👥 Participantes:** \`${participantCount}\``,
+        ].join('\n'),
+      ),
     )
-    .setFooter({ text: `Xerion v${CONFIG.VERSION}` });
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `**🗃️ Cofres abiertos en este canal:** ${formatNumber(serverStats.chests_opened_total || 0)}`,
+          `**🕰️ Última aparición:** ${serverStats.last_chest_at ? `<t:${toUnixSeconds(serverStats.last_chest_at)}:R>` : 'Es el primero de la historia'}`,
+          `**💬 Mensajes del canal:** ${formatNumber(serverStats.message_counter || 0)}`,
+          `**📈 Próxima probabilidad:** \`${(chance * 100).toFixed(0)}%\` · sube en \`${untilNext}\` mensajes`,
+          '**🛡️ Consejo:** un Escudo o un Amuleto de `/shop` pueden salvarte.',
+        ].join('\n'),
+      ),
+    )
+    .addActionRowComponents(buildParticipateRow(disabled));
 }
 
 function buildParticipateRow(disabled = false) {
@@ -274,28 +278,46 @@ function buildOpenRow(winnerId, disabled = false) {
 }
 
 function buildEmptyChestEmbed(chestType) {
-  return new EmbedBuilder()
-    .setColor(CONFIG.COLORS.NOTHING)
-    .setTitle('The chest is gone')
-    .setDescription(`Nadie se atrevió a entrar a tiempo. El ${chestType.name} desaparece sin dejar rastro.`)
-    .setFooter({ text: `Xerion v${CONFIG.VERSION}` });
+  return new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.NOTHING)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `# ${chestType.emoji} El cofre desapareció\n-# Nadie se atrevió a entrar a tiempo.\n\nEl ${chestType.name} se fue sin dejar rastro.`,
+      ),
+    );
 }
 
 function buildWinnerEmbed(winnerId, { solo = false, chestType }) {
-  return new EmbedBuilder()
-    .setColor(chestType.color)
-    .setTitle('🏆 We Have a Survivor')
-    .setDescription(
-      solo
-        ? `<@${winnerId}> entró en solitario. Nadie más se presentó — el ${chestType.name} es suyo por derecho.`
-        : `<@${winnerId}> ha sobrevivido a todos los demás.\n\nEl ${chestType.name} es tuyo — si te atreves a abrirlo.`,
-    );
+  return new ContainerBuilder()
+    .setAccentColor(chestType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          '# 🏆 Tenemos un superviviente',
+          solo
+            ? `<@${winnerId}> entró en solitario. Nadie más se presentó — el ${chestType.name} es suyo por derecho.`
+            : `<@${winnerId}> ha sobrevivido a todos los demás.\n\nEl ${chestType.name} es tuyo — si te atreves a abrirlo.`,
+        ].join('\n'),
+      ),
+    )
+    .addActionRowComponents(buildOpenRow(winnerId));
 }
 
 const OPENING_STEPS = ['🔒 The chest creaks open...', '✨ Something stirs inside...'];
 
 function buildOpeningStepEmbed(text, color) {
-  return new EmbedBuilder().setColor(color).setDescription(`**${text}**`);
+  return new ContainerBuilder()
+    .setAccentColor(color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${text}\n-# Xerion está resolviendo tu recompensa en tiempo real...`));
+}
+
+function buildSpinContainer(chestType, attachmentName = 'spin.png') {
+  return new ContainerBuilder()
+    .setAccentColor(chestType.color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${chestType.emoji} Abriendo ${chestType.name}`))
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
+    );
 }
 
 const RESULT_FLAVOR = {
@@ -314,27 +336,19 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)
         ? `${reward.emoji} **+${reward.amount} Feathers**`
         : `${reward.emoji} **Nothing**`;
 
-  const embed = new EmbedBuilder()
-    .setColor(reward.color)
-    .setTitle(`The ${chestType.name} has opened`)
-    .setDescription(
-      [`<@${winnerId}>`, '', `# ${resultLine}`, '', `*${RESULT_FLAVOR[reward.key]}*`].join('\n'),
-    )
-    .setFooter({ text: `Xerion v${CONFIG.VERSION}` });
+  const lines = [`# ${chestType.emoji} ${chestType.name} abierto`, `<@${winnerId}>`, '', `## ${resultLine}`, '', `*${RESULT_FLAVOR[reward.key]}*`];
 
   if (luckBoosted) {
-    embed.addFields({ name: '🍀 Amuleto de Suerte', value: 'Se consumió un Amuleto — tus probabilidades de rol estuvieron un 50% más altas en esta tirada.' });
+    lines.push('', '🍀 **Amuleto consumido:** tus probabilidades de rol fueron un 50% más altas en esta tirada.');
   }
 
   if (reward.kind === 'role' && !roleGranted) {
-    embed.addFields({
-      name: '⚠️ Heads up',
-      value:
-        "No pude asignarte el rol automáticamente — probablemente me falta el permiso **Manage Roles** o mi rol está por debajo del tuyo en la jerarquía. Pide a un admin que lo revise; tu premio ya quedó guardado en tus estadísticas.",
-    });
+    lines.push('', '⚠️ **No pude asignarte el rol:** revisa el permiso `Manage Roles` y la jerarquía. El premio sí quedó guardado.');
   }
 
-  return embed;
+  return new ContainerBuilder()
+    .setAccentColor(reward.color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
 }
 
 // ============================================================================
@@ -419,17 +433,27 @@ function buildQuickInventoryContainer(stats, discordUser) {
     .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Usa `/profile` para el detalle completo o `/shop` para gastar tus Feathers'));
 }
 
-function buildLeaderboardContainer(rows) {
+function buildLeaderboardContainer(rows, page = 0, totalPages = 1) {
   const medals = ['🥇', '🥈', '🥉'];
   const lines = rows.length
-    ? rows.map((row, i) => `${medals[i] || `**#${i + 1}**`}  <@${row.user_id}> — ${FEATHER_EMOJI} ${formatNumber(row.feathers)}`)
-    : ['Nobody has earned Feathers yet — be the first to survive a chest.'];
+    ? rows.map((row, i) => {
+      const rank = page * 10 + i + 1;
+      const label = row.display_name || row.username || row.resolved_name || `Usuario ${row.user_id.slice(-4)}`;
+      return `${medals[rank - 1] || `**#${rank}**`}  **${label}** · <@${row.user_id}> — ${FEATHER_EMOJI} ${formatNumber(row.feathers)}`;
+    })
+    : ['Todavía no hay usuarios con Feathers. Sé el primero en sobrevivir.'];
 
   return new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.FEATHERS)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# Leaderboard\n-# Top Feather holders'))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Leaderboard · Top 100\n-# Página ${page + 1} de ${totalPages} · Feathers del servidor`))
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')))
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`xerion_leaderboard_prev_${page}`).setLabel('Anterior').setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
+        new ButtonBuilder().setCustomId(`xerion_leaderboard_next_${page}`).setLabel('Siguiente').setEmoji('▶️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages - 1),
+      ),
+    );
 }
 
 function buildRatesContainer() {
@@ -455,7 +479,7 @@ function buildRatesContainer() {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `-# La probabilidad de que aparezca un cofre en <#${CONFIG.CHEST_CHANNEL_ID}> empieza en \`${(CONFIG.BASE_SPAWN_CHANCE * 100).toFixed(0)}%\` y sube \`+${(CONFIG.PROBABILITY_STEP_INCREASE * 100).toFixed(0)}%\` cada \`${CONFIG.PROBABILITY_STEP_MESSAGES}\` mensajes sin cofre, hasta un tope de \`${(CONFIG.MAX_SPAWN_CHANCE * 100).toFixed(0)}%\`. Ventana de 5 minutos para participar.`,
+        `-# En <#${CONFIG.CHEST_CHANNEL_ID}> empieza en \`${(CONFIG.BASE_SPAWN_CHANCE * 100).toFixed(0)}%\` y sube \`+${(CONFIG.PROBABILITY_STEP_INCREASE * 100).toFixed(0)}%\` cada \`${CONFIG.PROBABILITY_STEP_MESSAGES}\` mensajes del canal sin cofre, hasta \`${(CONFIG.MAX_SPAWN_CHANCE * 100).toFixed(0)}%\`. Ventana de 5 minutos.`,
       ),
     );
 
@@ -589,7 +613,7 @@ function buildHelpContainer() {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          '**Comandos de Jugador**',
+           '**Comandos de Jugador**',
           '`/profile` [`xn profile`] — tus estadísticas completas',
           '`/inventory` [`xn inv`] — balance rápido',
           '`/leaderboard` [`xn top`] — top Feather holders',
@@ -597,7 +621,17 @@ function buildHelpContainer() {
           '`/shop` [`xn shop`] — gasta tus Feathers en Escudos y Amuletos',
           '`/notification` [`xn notif`] — activa o desactiva los DM de cofre',
           '`/stats` [`xn stats`] — estadísticas del servidor',
-          '`/help` [`xn help`] — este menú',
+           '`/help` [`xn help`] — este menú',
+           '`/chest` [`xn chest`] — estado del cofre y probabilidad actual',
+           '`/daily` [`xn daily`] — reclama 25 Feathers cada 24 horas',
+           '`/history` [`xn history`] — últimas recompensas obtenidas',
+           '`/achievements` [`xn achievements`] — logros desbloqueados',
+           '`/rank` [`xn rank`] — tu posición y progreso',
+           '`/rewards` [`xn rewards`] — resumen de recompensas',
+           '`/streak` [`xn streak`] — actividad y racha de reclamaciones',
+           '`/ping` [`xn ping`] — latencia actual del bot',
+           '`/about` [`xn about`] — versión y estado de Xerion',
+           '`/rules` [`xn rules`] — reglas rápidas del juego',
         ].join('\n'),
       ),
     )
@@ -616,6 +650,121 @@ function buildHelpContainer() {
     );
 }
 
+function buildSimpleContainer(title, subtitle, lines, accent = CONFIG.COLORS.BRAND) {
+  return new ContainerBuilder()
+    .setAccentColor(accent)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${title}\n-# ${subtitle}`))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+}
+
+function buildDailyContainer(result) {
+  return buildSimpleContainer(
+    'Daily Drop',
+    result.claimed ? 'Recompensa reclamada' : 'Todavía no está disponible',
+    result.claimed
+      ? [`✅ Recibiste **+${result.reward} Feathers**.`, `${FEATHER_EMOJI} Saldo actual: **${formatNumber(result.feathers)}**`, `📅 Dailies reclamadas: **${result.daily_claims}**`]
+      : [`⏱️ Ya reclamaste tu recompensa diaria.`, `Disponible <t:${toUnixSeconds(new Date(new Date(result.last_daily_claim_at).getTime() + 24 * 60 * 60 * 1000))}:R>.`, `${FEATHER_EMOJI} Saldo actual: **${formatNumber(result.feathers)}**`],
+    CONFIG.COLORS.FEATHERS,
+  );
+}
+
+function buildHistoryContainer(rows) {
+  const lines = rows.length
+    ? rows.map((row, index) => `${index + 1}. **${row.reward_key}**${row.reward_amount ? ` · +${row.reward_amount} Feathers` : ''} · <t:${toUnixSeconds(row.created_at)}:R>`)
+    : ['Todavía no has abierto ningún cofre.'];
+  return buildSimpleContainer('Historial', 'Tus últimas recompensas', lines, CONFIG.COLORS.BRAND);
+}
+
+function buildAchievementsContainer(stats) {
+  const achievements = [
+    [stats.chests_participated >= 1, 'Primer salto', 'Participa en tu primer cofre.'],
+    [stats.chests_won >= 1, 'Último superviviente', 'Gana tu primer cofre.'],
+    [stats.chests_won >= 10, 'Imparable', 'Gana 10 cofres.'],
+    [stats.total_feathers_earned >= 100, 'Plumaje de acero', 'Consigue 100 Feathers en total.'],
+    [stats.aura_infinite_count >= 1, 'Aura despertada', 'Obtén AURA INFINITE.'],
+    [stats.king_count >= 1, 'Corona de Xerion', 'Obtén KING.'],
+    [stats.arise_count >= 1, 'El que regresa', 'Obtén ARISE.'],
+  ];
+  const lines = achievements.map(([done, name, description]) => `${done ? '✅' : '⬜'} **${name}** — ${description}`);
+  return buildSimpleContainer('Achievements', 'Logros permanentes', lines, CONFIG.COLORS.AURA_INFINITE);
+}
+
+function buildRankContainer(stats) {
+  return buildSimpleContainer(
+    'Tu rango',
+    'Progreso en el servidor',
+    [
+      `🏅 **Posición:** #${stats.rank} de ${stats.totalPlayers}`,
+      `${FEATHER_EMOJI} **Feathers:** ${formatNumber(stats.feathers)}`,
+      `📈 **Te faltan:** ${formatNumber(Math.max(0, stats.nextRankFeathers || 0))} para subir un puesto`,
+      `🏆 **Victorias:** ${formatNumber(stats.chests_won)}`,
+    ],
+    CONFIG.COLORS.KING,
+  );
+}
+
+function buildRewardsContainer() {
+  const lines = CHEST_TYPE_LIST.map((type) => {
+    const best = type.rewardTable.find((reward) => reward.key === 'ARISE');
+    const nothing = type.rewardTable.find((reward) => reward.key === 'NOTHING');
+    return `${type.emoji} **${type.name}** · ${type.tierLabel}\n> Mejor: ${best.chance}% · Nada: ${nothing.chance}%`;
+  });
+  return buildSimpleContainer('Rewards', 'Resumen de recompensas', lines, CONFIG.COLORS.ARISE);
+}
+
+function buildChestStatusContainer(channelId, state, active) {
+  const chance = computeSpawnChance(state.messages_since_chest || 0);
+  return buildSimpleContainer(
+    'Chest Status',
+    `<#${channelId}> · estado en tiempo real`,
+    [
+      active ? `🟢 **Cofre activo:** ${active.chestType?.name || 'en juego'}` : '⚫ **Cofre activo:** ninguno',
+      `💬 **Mensajes desde el último cofre:** ${formatNumber(state.messages_since_chest || 0)}`,
+      `📈 **Probabilidad actual:** ${(chance * 100).toFixed(0)}%`,
+      `🗃️ **Cofres aparecidos:** ${formatNumber(state.chests_spawned_total || 0)}`,
+      `🔓 **Cofres abiertos:** ${formatNumber(state.chests_opened_total || 0)}`,
+    ],
+    active?.chestType?.color || CONFIG.COLORS.BRAND,
+  );
+}
+
+function buildStreakContainer(stats) {
+  return buildSimpleContainer(
+    'Actividad',
+    'Tu progreso de Xerion',
+    [
+      `💬 **Cofres participados:** ${formatNumber(stats.chests_participated)}`,
+      `🏆 **Cofres ganados:** ${formatNumber(stats.chests_won)}`,
+      `📆 **Dailies reclamadas:** ${formatNumber(stats.daily_claims || 0)}`,
+      `${FEATHER_EMOJI} **Ganado en total:** ${formatNumber(stats.total_feathers_earned)}`,
+    ],
+    CONFIG.COLORS.FEATHERS,
+  );
+}
+
+function buildPingContainer(latency) {
+  return buildSimpleContainer('Pong', 'Conexión con Discord', [`⚡ **Latencia del bot:** ${latency} ms`, '✅ Xerion está respondiendo.'], CONFIG.COLORS.KING);
+}
+
+function buildAboutContainer() {
+  return buildSimpleContainer(
+    'Xerion',
+    `v${CONFIG.VERSION} · Components V2`,
+    ['Cofres difíciles, eliminación por rondas y recompensas persistentes.', 'Los contadores de probabilidad están separados por canal.', 'El progreso de usuarios se conserva entre reinicios.'],
+    CONFIG.COLORS.BRAND,
+  );
+}
+
+function buildRulesContainer() {
+  return buildSimpleContainer(
+    'Reglas',
+    'Cómo sobrevivir',
+    ['1. Cada 100 mensajes del canal, la probabilidad sube 1%.', '2. Entra al cofre antes de que cierre.', '3. La eliminación decide un único superviviente.', '4. El superviviente abre el cofre y recibe una recompensa.', '5. Usa `/shop` para comprar Escudos y Amuletos.'],
+    CONFIG.COLORS.ARISE,
+  );
+}
+
 module.exports = {
   generateSpinFrame,
   spinFrameAttachment,
@@ -626,6 +775,7 @@ module.exports = {
   buildEmptyChestEmbed,
   buildWinnerEmbed,
   buildOpeningStepEmbed,
+  buildSpinContainer,
   buildResultEmbed,
   OPENING_STEPS,
   buildProfileContainer,
@@ -637,4 +787,15 @@ module.exports = {
   buildChestAlertContainer,
   buildStatsContainer,
   buildHelpContainer,
+  buildSimpleContainer,
+  buildDailyContainer,
+  buildHistoryContainer,
+  buildAchievementsContainer,
+  buildRankContainer,
+  buildRewardsContainer,
+  buildChestStatusContainer,
+  buildStreakContainer,
+  buildPingContainer,
+  buildAboutContainer,
+  buildRulesContainer,
 };

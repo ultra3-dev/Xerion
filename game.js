@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.5.0 — game.js
+ *  XERION v1.6.9 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -77,13 +77,13 @@ function chestSnapshot(state) {
 }
 
 function persistChestState(state) {
-  return db.saveActiveChest(chestSnapshot(state)).catch((err) => {
+  return db.saveActiveChest(state.channelId, chestSnapshot(state)).catch((err) => {
     console.error('[Xerion] No se pudo guardar el snapshot del cofre:', err.message);
   });
 }
 
-async function clearPersistedChest() {
-  await db.clearActiveChest().catch((err) => {
+async function clearPersistedChest(channelId) {
+  await db.clearActiveChest(channelId).catch((err) => {
     console.error('[Xerion] No se pudo limpiar el snapshot final del cofre:', err.message);
   });
 }
@@ -156,12 +156,12 @@ async function trySpawnChest(channel, forcedTypeKey = null) {
 
 async function spawnChest(channel, forcedTypeKey) {
   const chestType = pickChestType(forcedTypeKey);
-  const previousState = await db.recordChestSpawn(); // resetea el contador y guarda el estado ANTERIOR
+  const previousState = await db.recordChestSpawn(channel.id); // resetea el contador de este canal
 
   const endsAt = Date.now() + CONFIG.JOIN_WINDOW_MS;
   const message = await channel.send({
-    embeds: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState })],
-    components: [visuals.buildParticipateRow()],
+    components: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState })],
+    flags: MessageFlags.IsComponentsV2,
     allowedMentions: SAFE_MENTIONS,
   });
 
@@ -216,21 +216,23 @@ async function notifyChestSpawn(client, chestType, chestMessage) {
 }
 
 function scheduleParticipantCountUpdate(state, message) {
-  if (state.updateScheduled) return;
-  state.updateScheduled = true;
-  setTimeout(async () => {
-    state.updateScheduled = false;
-    if (state.status !== 'waiting') return;
-    const previousState = await db.getState().catch(() => null);
-    if (!previousState) return;
-    const embed = visuals.buildChestEmbed({
-      chestType: state.chestType,
-      participantCount: state.participants.size,
-      endsAt: state.endsAt,
-      serverStats: previousState,
-    });
-    await message.edit({ embeds: [embed], allowedMentions: SAFE_MENTIONS }).catch(() => {});
-  }, 2500);
+  if (state.status !== 'waiting') return;
+  db.getState(state.channelId)
+    .then((channelStats) =>
+      message.edit({
+        components: [
+          visuals.buildChestEmbed({
+            chestType: state.chestType,
+            participantCount: state.participants.size,
+            endsAt: state.endsAt,
+            serverStats: channelStats,
+          }),
+        ],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: SAFE_MENTIONS,
+      }),
+    )
+    .catch(() => {});
 }
 
 async function handleParticipate(interaction) {
@@ -260,24 +262,27 @@ async function resolveJoinPhase(channel, state) {
 
   const message = await channel.messages.fetch(state.messageId).catch(() => null);
   if (message) {
-    const currentState = await db.getState().catch(() => null);
+      const currentState = await db.getState(channel.id).catch(() => null);
     if (currentState) {
-      const finalEmbed = visuals.buildChestEmbed({
+      const finalPanel = visuals.buildChestEmbed({
         chestType: state.chestType,
         participantCount: state.participants.size,
         endsAt: state.endsAt,
         serverStats: currentState,
+        disabled: true,
       });
-      await message.edit({ embeds: [finalEmbed], components: [visuals.buildParticipateRow(true)], allowedMentions: SAFE_MENTIONS }).catch(() => {});
+      await message.edit({ components: [finalPanel], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS }).catch(() => {});
     }
   }
 
   const participantIds = [...state.participants];
 
   if (participantIds.length === 0) {
-    await channel.send({ embeds: [visuals.buildEmptyChestEmbed(state.chestType)], allowedMentions: SAFE_MENTIONS }).catch(() => {});
+    await channel
+      .send({ components: [visuals.buildEmptyChestEmbed(state.chestType)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS })
+      .catch(() => {});
     activeChests.delete(channel.id);
-    await clearPersistedChest();
+    await clearPersistedChest(channel.id);
     return;
   }
 
@@ -290,9 +295,8 @@ async function resolveJoinPhase(channel, state) {
     await persistChestState(state);
     await channel
       .send({
-        content: `<@${winnerId}>`,
-        embeds: [visuals.buildWinnerEmbed(winnerId, { solo: true, chestType: state.chestType })],
-        components: [visuals.buildOpenRow(winnerId)],
+        components: [visuals.buildWinnerEmbed(winnerId, { solo: true, chestType: state.chestType })],
+        flags: MessageFlags.IsComponentsV2,
         allowedMentions: pingOnly([winnerId]),
       })
       .catch(() => {});
@@ -372,9 +376,8 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
   await persistChestState(state);
   await channel
     .send({
-      content: `<@${winnerId}>`,
-      embeds: [visuals.buildWinnerEmbed(winnerId, { chestType: state.chestType })],
-      components: [visuals.buildOpenRow(winnerId)],
+      components: [visuals.buildWinnerEmbed(winnerId, { chestType: state.chestType })],
+      flags: MessageFlags.IsComponentsV2,
       allowedMentions: pingOnly([winnerId]),
     })
     .catch(() => {});
@@ -393,7 +396,7 @@ async function grantRewardRole(guild, userId, roleId) {
 
 async function openChestSequence(channel, winnerId, chestType, state = null) {
   const seqMessage = await channel
-    .send({ embeds: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[0], chestType.color)], allowedMentions: SAFE_MENTIONS })
+    .send({ components: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[0], chestType.color)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS })
     .catch((err) => {
       console.error('[Xerion] No se pudo enviar el mensaje de apertura:', err);
       return null;
@@ -401,7 +404,7 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
 
   if (seqMessage) {
     await sleep(350);
-    await seqMessage.edit({ embeds: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[1], chestType.color)] }).catch(() => {});
+    await seqMessage.edit({ components: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[1], chestType.color)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
     await sleep(350);
   }
 
@@ -436,7 +439,12 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
       for (let i = 0; i < spinDelays.length; i++) {
         const isLast = i === spinDelays.length - 1;
         const attachment = visuals.spinFrameAttachment(chestType.rewardTable, chestType.color, isLast ? reward : null);
-        await seqMessage.edit({ content: '', embeds: [], files: [attachment], attachments: [] });
+    await seqMessage.edit({
+      components: [visuals.buildSpinContainer(chestType)],
+      flags: MessageFlags.IsComponentsV2,
+      files: [attachment],
+      attachments: [],
+    });
         await sleep(spinDelays[i]);
       }
       spinSucceeded = true;
@@ -446,14 +454,19 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
   }
 
   if (!spinSucceeded) {
-    const fallbackPayload = { content: '🎰 Rolling...', embeds: [], files: [], attachments: [] };
+    const fallbackPayload = {
+      components: [visuals.buildOpeningStepEmbed('🎰 Resolviendo la tirada...', chestType.color)],
+      flags: MessageFlags.IsComponentsV2,
+      files: [],
+      attachments: [],
+    };
     if (seqMessage) await seqMessage.edit(fallbackPayload).catch(() => {});
-    else await channel.send({ content: '🎰 Rolling...', allowedMentions: SAFE_MENTIONS }).catch(() => {});
+    else await channel.send({ components: [visuals.buildOpeningStepEmbed('🎰 Resolviendo la tirada...', chestType.color)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS }).catch(() => {});
     await sleep(300);
   }
 
   try {
-    await db.settleChestReward(state?.messageId || `legacy:${winnerId}`, winnerId, reward);
+    await db.settleChestReward(state?.messageId || `legacy:${winnerId}`, winnerId, reward, channel.id);
   } catch (err) {
     // Mantener el snapshot en `opening` permite reintentar en la próxima
     // conexión sin perder la recompensa ni sumarla dos veces.
@@ -468,8 +481,8 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
 
   await channel
     .send({
-      content: `<@${winnerId}>`,
-      embeds: [visuals.buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)],
+      components: [visuals.buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)],
+      flags: MessageFlags.IsComponentsV2,
       allowedMentions: pingOnly([winnerId]),
     })
     .catch((err) => console.error('[Xerion] Error enviando el embed de resultado:', err));
@@ -490,12 +503,15 @@ async function handleOpenChest(interaction) {
   state.openingClaimed = true;
   await persistChestState(state);
   await interaction.deferUpdate();
-  await interaction.message.edit({ components: [visuals.buildOpenRow(state.winnerId, true)] }).catch(() => {});
+  await interaction.message.edit({
+    components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)],
+    flags: MessageFlags.IsComponentsV2,
+  }).catch(() => {});
 
   const chestType = state.chestType;
   await openChestSequence(interaction.channel, state.winnerId, chestType, state);
   activeChests.delete(interaction.channelId);
-  await clearPersistedChest();
+  await clearPersistedChest(interaction.channelId);
 }
 
 // ============================================================================
@@ -561,6 +577,17 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('notification').setDescription('Toggle DM alerts for when a chest appears.'),
   new SlashCommandBuilder().setName('stats').setDescription('Server-wide Xerion stats.'),
   new SlashCommandBuilder().setName('help').setDescription('List all Xerion commands.'),
+  new SlashCommandBuilder().setName('chest').setDescription('See the live chest status and channel chance.'),
+  new SlashCommandBuilder().setName('daily').setDescription('Claim 25 Feathers once every 24 hours.'),
+  new SlashCommandBuilder().setName('claim').setDescription('Shortcut to claim your daily Feathers.'),
+  new SlashCommandBuilder().setName('history').setDescription('View your latest chest rewards.'),
+  new SlashCommandBuilder().setName('achievements').setDescription('View your Xerion achievements.'),
+  new SlashCommandBuilder().setName('rank').setDescription('View your rank and next milestone.'),
+  new SlashCommandBuilder().setName('rewards').setDescription('See a compact reward summary.'),
+  new SlashCommandBuilder().setName('streak').setDescription('View your Xerion activity.'),
+  new SlashCommandBuilder().setName('ping').setDescription('Check Xerion latency.'),
+  new SlashCommandBuilder().setName('about').setDescription('About Xerion and its current version.'),
+  new SlashCommandBuilder().setName('rules').setDescription('Read the quick game rules.'),
 ].map((cmd) => cmd.toJSON());
 
 /**
@@ -594,51 +621,52 @@ async function clearAndRegisterSlashCommands(client = null) {
 }
 
 /**
- * Reconstruye el único cofre activo desde Postgres. El snapshot es aditivo y
- * se borra solo cuando la partida termina, nunca al arrancar.
+ * Reconstruye todos los cofres activos desde Postgres. Los snapshots son
+ * aditivos y solo se borran cuando termina cada partida.
  */
 async function restoreActiveChest(client) {
-  const snapshot = await db.getActiveChest().catch((err) => {
+  const rows = await db.getActiveChests().catch((err) => {
     console.error('[Xerion] No se pudo leer el snapshot del cofre:', err.message);
-    return null;
+    return [];
   });
-  if (!snapshot?.channelId || !snapshot?.messageId || !snapshot?.chestTypeKey) return;
+  for (const row of rows) {
+    const snapshot = row.snapshot;
+    if (!snapshot?.channelId || !snapshot?.messageId || !snapshot?.chestTypeKey) continue;
 
-  const chestType = CHEST_TYPES[snapshot.chestTypeKey];
-  const channel = await client.channels.fetch(snapshot.channelId).catch(() => null);
-  if (!chestType || !channel) return;
+    const chestType = CHEST_TYPES[snapshot.chestTypeKey];
+    const channel = await client.channels.fetch(snapshot.channelId).catch(() => null);
+    if (!chestType || !channel) continue;
 
-  const state = {
-    ...snapshot,
-    channelId: snapshot.channelId,
-    messageId: snapshot.messageId,
-    chestType,
-    participants: new Set(snapshot.participants || []),
-    remainingIds: [...(snapshot.remainingIds || snapshot.participants || [])],
-    updateScheduled: false,
-    timeoutHandle: null,
-  };
-  activeChests.set(state.channelId, state);
+    const state = {
+      ...snapshot,
+      channelId: snapshot.channelId,
+      messageId: snapshot.messageId,
+      chestType,
+      participants: new Set(snapshot.participants || []),
+      remainingIds: [...(snapshot.remainingIds || snapshot.participants || [])],
+      updateScheduled: false,
+      timeoutHandle: null,
+    };
+    activeChests.set(state.channelId, state);
 
-  if (state.status === 'waiting') {
-    const remainingMs = Math.max(0, Number(state.endsAt || Date.now()) - Date.now());
-    state.timeoutHandle = setTimeout(
-      () => resolveJoinPhase(channel, state).catch((err) => console.error('[Xerion] Error recuperando cofre:', err)),
-      remainingMs,
-    );
-  } else if (state.status === 'battling' && state.remainingIds.length > 1) {
-    runBattleRoyale(channel, state, state.remainingIds, true).catch((err) =>
-      console.error('[Xerion] Error reanudando batalla:', err),
-    );
-  } else if (state.status === 'opening' && state.winnerId) {
-    // La liquidación usa la clave del mensaje como idempotency key: si ya se
-    // guardó antes de la caída, no vuelve a sumar plumas ni estadísticas.
-    openChestSequence(channel, state.winnerId, chestType, state)
-      .then(async () => {
-        activeChests.delete(state.channelId);
-        await clearPersistedChest();
-      })
-      .catch((err) => console.error('[Xerion] Error reanudando apertura:', err));
+    if (state.status === 'waiting') {
+      const remainingMs = Math.max(0, Number(state.endsAt || Date.now()) - Date.now());
+      state.timeoutHandle = setTimeout(
+        () => resolveJoinPhase(channel, state).catch((err) => console.error('[Xerion] Error recuperando cofre:', err)),
+        remainingMs,
+      );
+    } else if (state.status === 'battling' && state.remainingIds.length > 1) {
+      runBattleRoyale(channel, state, state.remainingIds, true).catch((err) =>
+        console.error('[Xerion] Error reanudando batalla:', err),
+      );
+    } else if (state.status === 'opening' && state.winnerId) {
+      openChestSequence(channel, state.winnerId, chestType, state)
+        .then(async () => {
+          activeChests.delete(state.channelId);
+          await db.clearActiveChest(state.channelId);
+        })
+        .catch((err) => console.error('[Xerion] Error reanudando apertura:', err));
+    }
   }
 }
 
@@ -668,7 +696,7 @@ async function cmdProfile(interaction) {
   const target = interaction.options.getUser('user') || interaction.user;
   await interaction.deferReply();
   try {
-    const stats = await db.getUserStats(target.id);
+    const stats = await db.getUserStats(target.id, { username: target.username, displayName: target.displayName });
     await interaction.editReply({ components: [visuals.buildProfileContainer(stats, target)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /profile:', err);
@@ -679,7 +707,7 @@ async function cmdProfile(interaction) {
 async function cmdInventory(interaction) {
   await interaction.deferReply();
   try {
-    const stats = await db.getUserStats(interaction.user.id);
+    const stats = await db.getUserStats(interaction.user.id, { username: interaction.user.username, displayName: interaction.user.displayName });
     await interaction.editReply({ components: [visuals.buildQuickInventoryContainer(stats, interaction.user)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /inventory:', err);
@@ -690,8 +718,13 @@ async function cmdInventory(interaction) {
 async function cmdLeaderboard(interaction) {
   await interaction.deferReply();
   try {
-    const rows = await db.getLeaderboard(10);
-    await interaction.editReply({ components: [visuals.buildLeaderboardContainer(rows)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    const rows = await hydrateLeaderboardRows(interaction.guild, await db.getLeaderboard(100));
+    const totalPages = Math.max(1, Math.ceil(rows.length / 10));
+    await interaction.editReply({
+      components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages)],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: SAFE_MENTIONS,
+    });
   } catch (err) {
     console.error('[Xerion] Error en /leaderboard:', err);
     await interaction.editReply('Could not load the leaderboard right now — try again in a moment.');
@@ -739,6 +772,77 @@ async function cmdHelp(interaction) {
   await interaction.reply({ components: [visuals.buildHelpContainer()], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
 }
 
+function identityFor(user) {
+  return { username: user.username, displayName: user.displayName || user.globalName || user.username };
+}
+
+async function hydrateLeaderboardRows(guild, rows) {
+  return Promise.all(
+    rows.map(async (row) => {
+      if (row.display_name && row.display_name !== 'unknown-user') return row;
+      const member = await guild?.members.fetch(row.user_id).catch(() => null);
+      return {
+        ...row,
+        resolved_name: member?.displayName || member?.user?.globalName || member?.user?.username || 'Usuario no disponible',
+      };
+    }),
+  );
+}
+
+async function sendV2(interaction, container, ephemeral = false) {
+  const flags = MessageFlags.IsComponentsV2 | (ephemeral ? MessageFlags.Ephemeral : 0);
+  const payload = { components: [container], flags, allowedMentions: SAFE_MENTIONS };
+  if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
+  return interaction.reply(payload);
+}
+
+async function cmdChest(interaction) {
+  const channelId = CONFIG.CHEST_CHANNEL_ID;
+  const state = await db.getServerStats(channelId);
+  return sendV2(interaction, visuals.buildChestStatusContainer(channelId, state, activeChests.get(channelId)));
+}
+
+async function cmdDaily(interaction) {
+  const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user));
+  return sendV2(interaction, visuals.buildDailyContainer(result), true);
+}
+
+async function cmdHistory(interaction) {
+  const rows = await db.getRecentAwards(interaction.user.id, 10);
+  return sendV2(interaction, visuals.buildHistoryContainer(rows));
+}
+
+async function cmdAchievements(interaction) {
+  const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+  return sendV2(interaction, visuals.buildAchievementsContainer(stats));
+}
+
+async function cmdRank(interaction) {
+  const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+  return sendV2(interaction, visuals.buildRankContainer(stats));
+}
+
+async function cmdRewards(interaction) {
+  return sendV2(interaction, visuals.buildRewardsContainer());
+}
+
+async function cmdStreak(interaction) {
+  const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+  return sendV2(interaction, visuals.buildStreakContainer(stats));
+}
+
+async function cmdPing(interaction) {
+  return sendV2(interaction, visuals.buildPingContainer(Math.max(0, Math.round(interaction.client.ws.ping))));
+}
+
+async function cmdAbout(interaction) {
+  return sendV2(interaction, visuals.buildAboutContainer());
+}
+
+async function cmdRules(interaction) {
+  return sendV2(interaction, visuals.buildRulesContainer());
+}
+
 async function handleSlashCommand(interaction) {
   switch (interaction.commandName) {
     case 'spawn': return cmdSpawn(interaction);
@@ -750,6 +854,16 @@ async function handleSlashCommand(interaction) {
     case 'notification': return cmdNotification(interaction);
     case 'stats': return cmdStats(interaction);
     case 'help': return cmdHelp(interaction);
+    case 'chest': return cmdChest(interaction);
+    case 'daily': case 'claim': return cmdDaily(interaction);
+    case 'history': return cmdHistory(interaction);
+    case 'achievements': return cmdAchievements(interaction);
+    case 'rank': return cmdRank(interaction);
+    case 'rewards': return cmdRewards(interaction);
+    case 'streak': return cmdStreak(interaction);
+    case 'ping': return cmdPing(interaction);
+    case 'about': return cmdAbout(interaction);
+    case 'rules': return cmdRules(interaction);
     default: return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
   }
 }
@@ -793,8 +907,12 @@ async function prefixInventory(message) {
 }
 
 async function prefixLeaderboard(message) {
-  const rows = await db.getLeaderboard(10);
-  return noPingReply(message, { components: [visuals.buildLeaderboardContainer(rows)], flags: MessageFlags.IsComponentsV2 });
+  const rows = await hydrateLeaderboardRows(message.guild, await db.getLeaderboard(100));
+  const totalPages = Math.max(1, Math.ceil(rows.length / 10));
+  return noPingReply(message, {
+    components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages)],
+    flags: MessageFlags.IsComponentsV2,
+  });
 }
 
 async function prefixRates(message) {
@@ -827,6 +945,55 @@ async function prefixHelp(message) {
   return noPingReply(message, { components: [visuals.buildHelpContainer()], flags: MessageFlags.IsComponentsV2 });
 }
 
+async function prefixChest(message) {
+  const state = await db.getServerStats(CONFIG.CHEST_CHANNEL_ID);
+  return noPingReply(message, {
+    components: [visuals.buildChestStatusContainer(CONFIG.CHEST_CHANNEL_ID, state, activeChests.get(CONFIG.CHEST_CHANNEL_ID))],
+    flags: MessageFlags.IsComponentsV2,
+  });
+}
+
+async function prefixDaily(message) {
+  const result = await db.claimDaily(message.author.id, identityFor(message.author));
+  return noPingReply(message, { components: [visuals.buildDailyContainer(result)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixHistory(message) {
+  const rows = await db.getRecentAwards(message.author.id, 10);
+  return noPingReply(message, { components: [visuals.buildHistoryContainer(rows)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixAchievements(message) {
+  const stats = await db.getUserStats(message.author.id, identityFor(message.author));
+  return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixRank(message) {
+  const stats = await db.getUserStats(message.author.id, identityFor(message.author));
+  return noPingReply(message, { components: [visuals.buildRankContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixRewards(message) {
+  return noPingReply(message, { components: [visuals.buildRewardsContainer()], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixStreak(message) {
+  const stats = await db.getUserStats(message.author.id, identityFor(message.author));
+  return noPingReply(message, { components: [visuals.buildStreakContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixPing(message) {
+  return noPingReply(message, { components: [visuals.buildPingContainer(Math.max(0, Math.round(message.client.ws.ping)))], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixAbout(message) {
+  return noPingReply(message, { components: [visuals.buildAboutContainer()], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixRules(message) {
+  return noPingReply(message, { components: [visuals.buildRulesContainer()], flags: MessageFlags.IsComponentsV2 });
+}
+
 async function handlePrefixCommand(message) {
   const withoutPrefix = message.content.slice(CONFIG.PREFIX.length).trim();
   const parts = withoutPrefix.split(/\s+/).filter(Boolean);
@@ -845,6 +1012,16 @@ async function handlePrefixCommand(message) {
       case 'shop': case 'tienda': return await prefixShop(message);
       case 'notification': case 'notif': return await prefixNotification(message);
       case 'stats': return await prefixStats(message);
+      case 'chest': case 'cofre': return await prefixChest(message);
+      case 'daily': case 'claim': return await prefixDaily(message);
+      case 'history': case 'historial': return await prefixHistory(message);
+      case 'achievements': case 'logros': return await prefixAchievements(message);
+      case 'rank': case 'rango': return await prefixRank(message);
+      case 'rewards': case 'recompensas': return await prefixRewards(message);
+      case 'streak': case 'racha': return await prefixStreak(message);
+      case 'ping': return await prefixPing(message);
+      case 'about': case 'info': return await prefixAbout(message);
+      case 'rules': case 'reglas': return await prefixRules(message);
       case 'help': case '': return await prefixHelp(message);
       default:
         return await noPingReply(message, { content: `Unknown command. Try \`${CONFIG.PREFIX} help\` to see everything I can do.` });
@@ -862,15 +1039,11 @@ async function handlePrefixCommand(message) {
 async function handleMessage(message) {
   if (message.author.bot || !message.guild) return;
 
-  const lowerContent = message.content.toLowerCase();
-  if (lowerContent === CONFIG.PREFIX || lowerContent.startsWith(`${CONFIG.PREFIX} `)) {
-    return handlePrefixCommand(message);
-  }
-
   if (message.channelId === CONFIG.CHEST_CHANNEL_ID) {
     try {
-      await db.incrementMessageCounter(); // estadística histórica, no afecta la probabilidad
-      const sinceChest = await db.incrementMessagesSinceChest();
+      await db.ensureUser(message.author.id, identityFor(message.author));
+      await db.incrementMessageCounter(message.channelId);
+      const sinceChest = await db.incrementMessagesSinceChest(message.channelId);
       const chance = computeSpawnChance(sinceChest);
       if (Math.random() < chance) {
         await trySpawnChest(message.channel);
@@ -878,6 +1051,11 @@ async function handleMessage(message) {
     } catch (err) {
       console.error('[Xerion] Error en el contador de mensajes / intento de aparición:', err);
     }
+  }
+
+  const lowerContent = message.content.toLowerCase();
+  if (lowerContent === CONFIG.PREFIX || lowerContent.startsWith(`${CONFIG.PREFIX} `)) {
+    return handlePrefixCommand(message);
   }
 }
 
@@ -893,6 +1071,18 @@ async function handleInteraction(interaction) {
       if (id === 'xerion_buy_shield') return await handleShopBuy(interaction, 'SHIELD');
       if (id === 'xerion_buy_charm') return await handleShopBuy(interaction, 'CHARM');
       if (id === 'xerion_notif_toggle') return await handleNotifToggle(interaction);
+      if (id.startsWith('xerion_leaderboard_prev_') || id.startsWith('xerion_leaderboard_next_')) {
+        const currentPage = Number(id.split('_').pop()) || 0;
+        const nextPage = id.includes('_prev_') ? currentPage - 1 : currentPage + 1;
+        const rows = await hydrateLeaderboardRows(interaction.guild, await db.getLeaderboard(100));
+        const totalPages = Math.max(1, Math.ceil(rows.length / 10));
+        const safePage = Math.max(0, Math.min(nextPage, totalPages - 1));
+        return interaction.update({
+          components: [visuals.buildLeaderboardContainer(rows.slice(safePage * 10, safePage * 10 + 10), safePage, totalPages)],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: SAFE_MENTIONS,
+        });
+      }
     }
   } catch (err) {
     console.error('[Xerion] Error manejando una interacción:', err);
