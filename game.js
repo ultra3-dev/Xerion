@@ -58,6 +58,36 @@ const visuals = require('./visuals.js');
 /** @type {Map<string, object>} channelId -> ChestState */
 const activeChests = new Map();
 
+function chestSnapshot(state) {
+  return {
+    channelId: state.channelId,
+    messageId: state.messageId,
+    chestTypeKey: state.chestType.key,
+    participants: [...(state.participants || [])],
+    remainingIds: [...(state.remainingIds || [])],
+    status: state.status,
+    endsAt: state.endsAt,
+    winnerId: state.winnerId || null,
+    openingClaimed: Boolean(state.openingClaimed),
+    rewardKey: state.reward?.key || null,
+    rewardAmount: state.reward?.amount ?? null,
+    luckBoosted: Boolean(state.luckBoosted),
+    round: Number(state.round || 0),
+  };
+}
+
+function persistChestState(state) {
+  return db.saveActiveChest(chestSnapshot(state)).catch((err) => {
+    console.error('[Xerion] No se pudo guardar el snapshot del cofre:', err.message);
+  });
+}
+
+async function clearPersistedChest() {
+  await db.clearActiveChest().catch((err) => {
+    console.error('[Xerion] No se pudo limpiar el snapshot final del cofre:', err.message);
+  });
+}
+
 const ELIMINATION_PHRASES_SINGLE = [
   '{name} ha sido eliminado.',
   '{name} no lo logró.',
@@ -146,6 +176,7 @@ async function spawnChest(channel, forcedTypeKey) {
     winnerId: null,
     updateScheduled: false,
   });
+  await persistChestState(state);
 
   state.timeoutHandle = setTimeout(() => {
     resolveJoinPhase(channel, state).catch((err) => console.error('[Xerion] Error resolviendo la fase de unión del cofre:', err));
@@ -213,6 +244,7 @@ async function handleParticipate(interaction) {
   }
 
   state.participants.add(interaction.user.id);
+  await persistChestState(state);
   await interaction.reply({ content: '✅ You are in. Wait for the timer to run out.', flags: MessageFlags.Ephemeral });
 
   db.incrementChestsParticipated(interaction.user.id).catch((err) =>
@@ -223,6 +255,8 @@ async function handleParticipate(interaction) {
 
 async function resolveJoinPhase(channel, state) {
   state.status = 'battling';
+  state.remainingIds = [...state.participants];
+  await persistChestState(state);
 
   const message = await channel.messages.fetch(state.messageId).catch(() => null);
   if (message) {
@@ -243,6 +277,7 @@ async function resolveJoinPhase(channel, state) {
   if (participantIds.length === 0) {
     await channel.send({ embeds: [visuals.buildEmptyChestEmbed(state.chestType)], allowedMentions: SAFE_MENTIONS }).catch(() => {});
     activeChests.delete(channel.id);
+    await clearPersistedChest();
     return;
   }
 
@@ -251,6 +286,8 @@ async function resolveJoinPhase(channel, state) {
     await db.incrementChestsWon(winnerId).catch((err) => console.error('[Xerion] Error registrando victoria en solitario:', err));
     state.status = 'awaiting_open';
     state.winnerId = winnerId;
+    state.remainingIds = [winnerId];
+    await persistChestState(state);
     await channel
       .send({
         content: `<@${winnerId}>`,
@@ -265,15 +302,20 @@ async function resolveJoinPhase(channel, state) {
   await runBattleRoyale(channel, state, participantIds);
 }
 
-async function runBattleRoyale(channel, state, participantIds) {
-  await channel.send({ content: '**El juego ha comenzado. Buena suerte — la van a necesitar...**', allowedMentions: SAFE_MENTIONS }).catch(() => {});
-  await sleep(CONFIG.INTRO_DELAY_MS);
+async function runBattleRoyale(channel, state, participantIds, resumed = false) {
+  if (!resumed) {
+    await channel.send({ content: '**El juego ha comenzado. Buena suerte — la van a necesitar...**', allowedMentions: SAFE_MENTIONS }).catch(() => {});
+    await sleep(CONFIG.INTRO_DELAY_MS);
+  }
 
-  let remaining = shuffle(participantIds);
-  let round = 0;
+  let remaining = resumed && state.remainingIds?.length ? [...state.remainingIds] : shuffle(participantIds);
+  state.remainingIds = [...remaining];
+  await persistChestState(state);
+  let round = Number(state.round || 0);
 
   while (remaining.length > 1) {
     round++;
+    state.round = round;
     const batchSize = decideBatchSize(remaining.length);
 
     // Ronda 1: quien tenga un Escudo de Xerion es inmune esa ronda — y el
@@ -301,6 +343,8 @@ async function runBattleRoyale(channel, state, participantIds) {
       eliminated.push(pickedId);
     }
     remaining = remaining.filter((id) => !eliminated.includes(id));
+    state.remainingIds = [...remaining];
+    await persistChestState(state);
 
     if (round === 1 && shieldedThisRound.size > 0) {
       db.consumeShields([...shieldedThisRound]).catch((err) => console.error('[Xerion] Error consumiendo escudos:', err));
@@ -324,6 +368,8 @@ async function runBattleRoyale(channel, state, participantIds) {
   await db.incrementChestsWon(winnerId).catch((err) => console.error('[Xerion] Error registrando victoria:', err));
   state.status = 'awaiting_open';
   state.winnerId = winnerId;
+  state.remainingIds = [winnerId];
+  await persistChestState(state);
   await channel
     .send({
       content: `<@${winnerId}>`,
@@ -345,7 +391,7 @@ async function grantRewardRole(guild, userId, roleId) {
   }
 }
 
-async function openChestSequence(channel, winnerId, chestType) {
+async function openChestSequence(channel, winnerId, chestType, state = null) {
   const seqMessage = await channel
     .send({ embeds: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[0], chestType.color)], allowedMentions: SAFE_MENTIONS })
     .catch((err) => {
@@ -354,28 +400,39 @@ async function openChestSequence(channel, winnerId, chestType) {
     });
 
   if (seqMessage) {
-    await sleep(1100);
+    await sleep(350);
     await seqMessage.edit({ embeds: [visuals.buildOpeningStepEmbed(visuals.OPENING_STEPS[1], chestType.color)] }).catch(() => {});
-    await sleep(1100);
+    await sleep(350);
   }
 
   // Amuleto de Suerte: si el ganador tiene uno, se consume y mejora la tabla para ESTA tirada.
-  let luckBoosted = false;
-  let table = chestType.rewardTable;
-  try {
-    luckBoosted = await db.consumeLuckCharmIfAvailable(winnerId);
-    if (luckBoosted) table = applyLuckBoost(table);
-  } catch (err) {
-    console.error('[Xerion] Error consultando/consumiendo el amuleto de suerte:', err);
-  }
+  let luckBoosted = Boolean(state?.luckBoosted);
+  let reward = state?.rewardKey ? chestType.rewardTable.find((item) => item.key === state.rewardKey) : null;
+  if (reward) {
+    reward = { ...reward };
+    if (reward.kind === 'currency') reward.amount = state.rewardAmount;
+  } else {
+    let table = chestType.rewardTable;
+    try {
+      luckBoosted = await db.consumeLuckCharmIfAvailable(winnerId);
+      if (luckBoosted) table = applyLuckBoost(table);
+    } catch (err) {
+      console.error('[Xerion] Error consultando/consumiendo el amuleto de suerte:', err);
+    }
 
-  let reward = rollReward(table);
-  if (reward.kind === 'currency') reward = { ...reward, amount: rollFeatherAmount(reward) };
+    reward = rollReward(table);
+    if (reward.kind === 'currency') reward = { ...reward, amount: rollFeatherAmount(reward) };
+    if (state) {
+      state.reward = reward;
+      state.luckBoosted = luckBoosted;
+      await persistChestState(state);
+    }
+  }
 
   let spinSucceeded = false;
   if (seqMessage) {
     try {
-      const spinDelays = [500, 550, 650, 800, 1000, 1300, 1700];
+      const spinDelays = [120, 140, 170, 210, 260, 320, 420];
       for (let i = 0; i < spinDelays.length; i++) {
         const isLast = i === spinDelays.length - 1;
         const attachment = visuals.spinFrameAttachment(chestType.rewardTable, chestType.color, isLast ? reward : null);
@@ -392,11 +449,17 @@ async function openChestSequence(channel, winnerId, chestType) {
     const fallbackPayload = { content: '🎰 Rolling...', embeds: [], files: [], attachments: [] };
     if (seqMessage) await seqMessage.edit(fallbackPayload).catch(() => {});
     else await channel.send({ content: '🎰 Rolling...', allowedMentions: SAFE_MENTIONS }).catch(() => {});
-    await sleep(900);
+    await sleep(300);
   }
 
-  await db.applyRewardToUser(winnerId, reward).catch((err) => console.error('[Xerion] Error guardando la recompensa en la base de datos:', err));
-  await db.recordChestOpened().catch((err) => console.error('[Xerion] Error registrando apertura de cofre:', err));
+  try {
+    await db.settleChestReward(state?.messageId || `legacy:${winnerId}`, winnerId, reward);
+  } catch (err) {
+    // Mantener el snapshot en `opening` permite reintentar en la próxima
+    // conexión sin perder la recompensa ni sumarla dos veces.
+    console.error('[Xerion] Error guardando la recompensa en la base de datos:', err);
+    throw err;
+  }
 
   let roleGranted = false;
   if (reward.kind === 'role') {
@@ -423,13 +486,16 @@ async function handleOpenChest(interaction) {
     return interaction.reply({ content: "This isn't your chest to open.", flags: MessageFlags.Ephemeral });
   }
 
-  state.status = 'done';
+  state.status = 'opening';
+  state.openingClaimed = true;
+  await persistChestState(state);
   await interaction.deferUpdate();
   await interaction.message.edit({ components: [visuals.buildOpenRow(state.winnerId, true)] }).catch(() => {});
 
   const chestType = state.chestType;
+  await openChestSequence(interaction.channel, state.winnerId, chestType, state);
   activeChests.delete(interaction.channelId);
-  await openChestSequence(interaction.channel, state.winnerId, chestType);
+  await clearPersistedChest();
 }
 
 // ============================================================================
@@ -502,12 +568,14 @@ const slashCommandDefinitions = [
  * re-registrar los actuales — así no quedan comandos clonados de un
  * proyecto o versión anterior colgando en ningún scope.
  */
-async function clearAndRegisterSlashCommands() {
+async function clearAndRegisterSlashCommands(client = null) {
   const rest = new REST().setToken(CONFIG.TOKEN);
   try {
     await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: [] });
-    if (CONFIG.GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, CONFIG.GUILD_ID), { body: [] });
+    const guildIds = new Set(client?.guilds?.cache?.keys() || []);
+    if (CONFIG.GUILD_ID) guildIds.add(CONFIG.GUILD_ID);
+    for (const guildId of guildIds) {
+      await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, guildId), { body: [] });
     }
 
     const route = CONFIG.GUILD_ID
@@ -522,6 +590,55 @@ async function clearAndRegisterSlashCommands() {
     );
   } catch (err) {
     console.error('[Xerion] Error limpiando/registrando slash commands:', err);
+  }
+}
+
+/**
+ * Reconstruye el único cofre activo desde Postgres. El snapshot es aditivo y
+ * se borra solo cuando la partida termina, nunca al arrancar.
+ */
+async function restoreActiveChest(client) {
+  const snapshot = await db.getActiveChest().catch((err) => {
+    console.error('[Xerion] No se pudo leer el snapshot del cofre:', err.message);
+    return null;
+  });
+  if (!snapshot?.channelId || !snapshot?.messageId || !snapshot?.chestTypeKey) return;
+
+  const chestType = CHEST_TYPES[snapshot.chestTypeKey];
+  const channel = await client.channels.fetch(snapshot.channelId).catch(() => null);
+  if (!chestType || !channel) return;
+
+  const state = {
+    ...snapshot,
+    channelId: snapshot.channelId,
+    messageId: snapshot.messageId,
+    chestType,
+    participants: new Set(snapshot.participants || []),
+    remainingIds: [...(snapshot.remainingIds || snapshot.participants || [])],
+    updateScheduled: false,
+    timeoutHandle: null,
+  };
+  activeChests.set(state.channelId, state);
+
+  if (state.status === 'waiting') {
+    const remainingMs = Math.max(0, Number(state.endsAt || Date.now()) - Date.now());
+    state.timeoutHandle = setTimeout(
+      () => resolveJoinPhase(channel, state).catch((err) => console.error('[Xerion] Error recuperando cofre:', err)),
+      remainingMs,
+    );
+  } else if (state.status === 'battling' && state.remainingIds.length > 1) {
+    runBattleRoyale(channel, state, state.remainingIds, true).catch((err) =>
+      console.error('[Xerion] Error reanudando batalla:', err),
+    );
+  } else if (state.status === 'opening' && state.winnerId) {
+    // La liquidación usa la clave del mensaje como idempotency key: si ya se
+    // guardó antes de la caída, no vuelve a sumar plumas ni estadísticas.
+    openChestSequence(channel, state.winnerId, chestType, state)
+      .then(async () => {
+        activeChests.delete(state.channelId);
+        await clearPersistedChest();
+      })
+      .catch((err) => console.error('[Xerion] Error reanudando apertura:', err));
   }
 }
 
@@ -792,4 +909,5 @@ module.exports = {
   handleMessage,
   handleInteraction,
   clearAndRegisterSlashCommands,
+  restoreActiveChest,
 };

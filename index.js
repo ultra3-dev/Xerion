@@ -283,7 +283,8 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   // Limpia cualquier slash command clonado de un proyecto/versión anterior
   // y registra únicamente el set actual de 9 comandos.
-  await game.clearAndRegisterSlashCommands();
+  await game.clearAndRegisterSlashCommands(readyClient);
+  await game.restoreActiveChest(readyClient);
 });
 
 client.on(Events.MessageCreate, (message) => {

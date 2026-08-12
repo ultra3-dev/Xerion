@@ -51,6 +51,10 @@ const XERION_STATE_COLUMNS = [
   ['chests_spawned_total', 'INTEGER NOT NULL DEFAULT 0'],
   ['chests_opened_total', 'INTEGER NOT NULL DEFAULT 0'],
   ['last_chest_at', 'TIMESTAMPTZ'],
+  // Snapshot aditivo del cofre actual. Nunca se usa para reiniciar la base:
+  // solo permite reconstruir una partida si el proceso pierde la conexión.
+  ['active_chest', 'JSONB'],
+  ['active_chest_updated_at', 'TIMESTAMPTZ'],
 ];
 
 async function initDatabase() {
@@ -81,6 +85,16 @@ async function initDatabase() {
       user_id TEXT PRIMARY KEY,
       enabled BOOLEAN NOT NULL DEFAULT FALSE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS xerion_chest_awards (
+      chest_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      reward_key TEXT NOT NULL,
+      reward_amount INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 
@@ -130,6 +144,62 @@ async function applyRewardToUser(userId, reward) {
     await pool.query(`UPDATE xerion_users SET ${column} = ${column} + 1 WHERE user_id = $1;`, [userId]);
   }
   // 'none' no toca la fila — no le tocó nada, literalmente.
+}
+
+/**
+ * Liquida una recompensa exactamente una vez por cofre. La clave primaria
+ * evita duplicados si el proceso cae entre el premio y el mensaje final.
+ * La tabla es nueva y aditiva: nunca se borra ni se reinicia.
+ */
+async function settleChestReward(chestId, userId, reward) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO xerion_chest_awards (chest_id, user_id, reward_key, reward_amount)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (chest_id) DO NOTHING
+       RETURNING chest_id;`,
+      [chestId, userId, reward.key, reward.amount || 0],
+    );
+
+    if (rows.length === 0) {
+      await client.query('COMMIT');
+      return false;
+    }
+
+    await client.query(
+      `INSERT INTO xerion_users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING;`,
+      [userId],
+    );
+
+    if (reward.kind === 'currency') {
+      await client.query(
+        `UPDATE xerion_users
+         SET feathers = feathers + $2, total_feathers_earned = total_feathers_earned + $2
+         WHERE user_id = $1;`,
+        [userId, reward.amount],
+      );
+    } else if (reward.kind === 'role') {
+      const roleColumn = {
+        AURA_INFINITE: 'aura_infinite_count',
+        KING: 'king_count',
+        ARISE: 'arise_count',
+      }[reward.key];
+      if (roleColumn) {
+        await client.query(`UPDATE xerion_users SET ${roleColumn} = ${roleColumn} + 1 WHERE user_id = $1;`, [userId]);
+      }
+    }
+
+    await client.query(`UPDATE xerion_state SET chests_opened_total = chests_opened_total + 1 WHERE id = 1;`);
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function getUserStats(userId) {
@@ -201,6 +271,28 @@ async function recordChestOpened() {
 async function getState() {
   const { rows } = await pool.query(`SELECT * FROM xerion_state WHERE id = 1;`);
   return rows[0];
+}
+
+async function getActiveChest() {
+  const { rows } = await pool.query(`SELECT active_chest FROM xerion_state WHERE id = 1;`);
+  return rows[0]?.active_chest || null;
+}
+
+async function saveActiveChest(snapshot) {
+  await pool.query(
+    `UPDATE xerion_state
+     SET active_chest = $1::jsonb, active_chest_updated_at = NOW()
+     WHERE id = 1;`,
+    [JSON.stringify(snapshot)],
+  );
+}
+
+async function clearActiveChest() {
+  await pool.query(
+    `UPDATE xerion_state
+     SET active_chest = NULL, active_chest_updated_at = NOW()
+     WHERE id = 1;`,
+  );
 }
 
 async function getServerStats() {
@@ -307,6 +399,7 @@ module.exports = {
   incrementChestsParticipated,
   incrementChestsWon,
   applyRewardToUser,
+  settleChestReward,
   getUserStats,
   getLeaderboard,
   incrementMessageCounter,
@@ -314,6 +407,9 @@ module.exports = {
   recordChestSpawn,
   recordChestOpened,
   getState,
+  getActiveChest,
+  saveActiveChest,
+  clearActiveChest,
   getServerStats,
   getNotificationEnabled,
   setNotificationEnabled,

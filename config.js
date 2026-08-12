@@ -50,9 +50,11 @@ const CONFIG = {
   JOIN_WINDOW_MS: 5 * 60 * 1000, // 5 minutos para pulsar "Participate"
 
   // Ritmo del minijuego de eliminación
-  INTRO_DELAY_MS: 10_000,
-  ELIMINATION_DELAY_MIN_MS: 2200,
-  ELIMINATION_DELAY_MAX_MS: 3400,
+  // La animación conserva ritmo, pero las acciones del usuario no esperan
+  // pausas artificiales largas.
+  INTRO_DELAY_MS: 1_200,
+  ELIMINATION_DELAY_MIN_MS: 850,
+  ELIMINATION_DELAY_MAX_MS: 1_400,
   BATCH_THRESHOLD: 10,
   BATCH_FRACTION: 0.25,
 
