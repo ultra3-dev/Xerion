@@ -174,15 +174,15 @@ const SHOP_ITEMS = {
     key: 'SHIELD',
     name: 'Escudo de Xerion',
     emoji: '🛡️',
-    cost: 40,
-    description: 'Te protege automáticamente si te toca caer en la **primera ronda** de tu próxima batalla. Se consume al usarse.',
+    cost: 100,
+    description: 'Objeto raro: te protege automáticamente si te toca caer en la **primera ronda** de tu próxima batalla. Se consume al usarse.',
   },
   CHARM: {
     key: 'CHARM',
     name: 'Amuleto de Suerte',
     emoji: '🍀',
-    cost: 60,
-    description: 'La próxima vez que abras un cofre, tus probabilidades de conseguir un **rol** suben un 50%. Se consume al usarse.',
+    cost: 150,
+    description: 'Objeto legendario: la próxima vez que abras un cofre, tus probabilidades de conseguir un **rol** suben un 50%. Se consume al usarse.',
   },
 };
 

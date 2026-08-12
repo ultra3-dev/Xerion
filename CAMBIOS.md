@@ -26,7 +26,7 @@ Reemplaza tu `index.js` actual por estos 5 archivos (mismo `package.json`, actua
 
 ## Lo que pediste, uno por uno
 
-- **Las plumas ahora sirven para algo** → `/shop`: **Escudo de Xerion** (🛡️ 40 plumas, te salva de la ronda 1 de eliminación) y **Amuleto de Suerte** (🍀 60 plumas, +50% probabilidad de rol en tu próxima apertura). Ambos se consumen al usarse.
+- **La tienda es más difícil** → `/shop`: **Escudo de Xerion** (🛡️ 100 plumas, te salva de la ronda 1 de eliminación) y **Amuleto de Suerte** (🍀 150 plumas, +50% probabilidad de rol en tu próxima apertura). Ambos son objetos escasos y se consumen al usarse.
 - **3 tipos de cofre** (inventé los nombres): 🩶 Cofre de Ceniza (común), 🔥 Cofre de Brasa (raro), 🌑 Cofre del Abismo (legendario). Cada uno con su propia tabla de probabilidad — **incluso el Abismo sigue siendo mayormente "Nothing"**, el sistema es difícil a propósito.
 - **Probabilidad dinámica v1.6.9**: empieza en 0% y sube +1% cada 100 mensajes del canal de cofres, hasta 100%. Cada canal tiene su propio contador persistente.
 - **Panel Components V2 del cofre** con estadísticas en tiempo real (tipo, mejor recompensa, rango de plumas, % de nada, cierre, participantes, cofres abiertos del canal, última aparición, mensajes procesados, probabilidad siguiente y tip de tienda).
