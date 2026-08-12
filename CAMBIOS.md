@@ -1,4 +1,11 @@
-# Xerion v1.6.9 — Qué cambió
+# Xerion v1.7.0 — Qué cambió
+
+## Corrección de compatibilidad con bases existentes
+
+- Se corrigió el `ReportNotNullViolationError` de `xerion_users.guild_id` que aparecía en producción cuando la tabla provenía de una versión antigua.
+- La migración detecta esa columna solo si existe y le asigna un valor por defecto estable para usuarios nuevos; no modifica ni elimina filas existentes.
+- El alta de usuarios usa una inserción compatible con esquemas antiguos y actualiza nombres sin depender de que exista exactamente un índice único sobre `user_id`.
+- Se mantiene el esquema aditivo: no hay `DROP`, truncados ni reinicios de contadores, tienda, logros, recompensas o cofres activos.
 
 ## Estructura (5 archivos, como pediste)
 

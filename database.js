@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.6.9 — database.js
+ *  XERION v1.7.0 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -61,6 +61,42 @@ const XERION_STATE_COLUMNS = [
   ['active_chest_updated_at', 'TIMESTAMPTZ'],
 ];
 
+/**
+ * La tabla de usuarios de versiones muy antiguas tenía `guild_id NOT NULL`,
+ * aunque el modelo actual es global por usuario. PostgreSQL exige rellenar
+ * esa columna incluso cuando el INSERT solo usa `user_id`, que es el
+ * ReportNotNullViolationError de las capturas.
+ *
+ * Esta migración es deliberadamente aditiva: no borra filas, no cambia
+ * identificadores existentes y solo añade un valor por defecto para los
+ * usuarios nuevos. Se usa GUILD_ID cuando existe; si no, el canal principal
+ * del juego funciona como un identificador estable de instalación.
+ */
+function sqlStringLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+async function ensureLegacyUsersCompatibility() {
+  const { rows } = await pool.query(`
+    SELECT is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'xerion_users'
+      AND column_name = 'guild_id'
+    LIMIT 1;
+  `);
+  const legacyGuildColumn = rows[0];
+  if (!legacyGuildColumn || legacyGuildColumn.is_nullable !== 'NO' || legacyGuildColumn.column_default) {
+    return;
+  }
+
+  const fallbackGuildId = CONFIG.GUILD_ID || CONFIG.CHEST_CHANNEL_ID;
+  await pool.query(
+    `ALTER TABLE xerion_users ALTER COLUMN guild_id SET DEFAULT ${sqlStringLiteral(fallbackGuildId)};`,
+  );
+  console.log('[Xerion][DB] Compatibilidad legacy aplicada: guild_id conserva su obligación con un valor por defecto.');
+}
+
 async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_users (
@@ -70,6 +106,7 @@ async function initDatabase() {
   for (const [name, definition] of XERION_USERS_COLUMNS) {
     await pool.query(`ALTER TABLE xerion_users ADD COLUMN IF NOT EXISTS ${name} ${definition};`);
   }
+  await ensureLegacyUsersCompatibility();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_state (
@@ -166,9 +203,14 @@ async function ensureUser(userId, identity = {}) {
   await pool.query(
     `INSERT INTO xerion_users (user_id, username, display_name)
      VALUES ($1, $2, $3)
-     ON CONFLICT (user_id) DO UPDATE SET
-       username = COALESCE(NULLIF(EXCLUDED.username, ''), xerion_users.username),
-       display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), xerion_users.display_name);`,
+     ON CONFLICT DO NOTHING;`,
+    [userId, identity.username || null, identity.displayName || null],
+  );
+  await pool.query(
+    `UPDATE xerion_users
+     SET username = COALESCE(NULLIF($2, ''), username),
+         display_name = COALESCE(NULLIF($3, ''), display_name)
+     WHERE user_id = $1;`,
     [userId, identity.username || null, identity.displayName || null],
   );
 }

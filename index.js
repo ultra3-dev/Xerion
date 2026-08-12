@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.6.9 — index.js
+ *  XERION v1.7.0 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -289,7 +289,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   });
 
   // Limpia cualquier slash command clonado de un proyecto/versión anterior
-  // y registra únicamente el set actual de 9 comandos.
+  // y registra únicamente el set actual de comandos.
   await game.clearAndRegisterSlashCommands(readyClient);
   await game.restoreActiveChest(readyClient);
 });

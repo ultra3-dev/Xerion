@@ -1,4 +1,4 @@
-# Xerion v1.6.9
+# Xerion v1.7.0
 
 Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Hecho con **discord.js v14 (Components V2)**, **Express** y **PostgreSQL (Neon)**.
 
@@ -74,7 +74,7 @@ La página principal (`/`) es la web informativa — solo información sobre el 
 ## Decisiones de diseño (por si tocas el código)
 
 - **Embeds clásicos vs. Components V2:** Discord no permite mezclar embeds con Components V2 en un mismo mensaje. El flujo del cofre (aparición, eliminación, apertura) usa embeds clásicos + botones porque se edita muchas veces en poco tiempo y es más predecible. Los paneles de información (`/profile`, `/leaderboard`, `/rates`, `/help`, `xn inv`) usan Components V2 real.
-- **Estado en memoria vs. base de datos:** las estadísticas de cada jugador y el contador de mensajes viven en Postgres y sobreviven a reinicios. Lo único que se pierde si Render reinicia el proceso es el cofre que esté a mitad de partida en ese momento — es un caso extremadamente raro (la ventana de un cofre dura pocos minutos) y el bot lo maneja sin romperse: los botones de un cofre "huérfano" simplemente responden que ya no está activo.
+- **Estado en memoria vs. base de datos:** las estadísticas de cada jugador, el contador de mensajes y los cofres activos viven en Postgres y sobreviven a reinicios. El bot reconstruye la partida por canal y continúa la fase pendiente sin borrar el progreso.
 - **Canvas:** la animación de apertura dibuja solo formas, degradados y texto — nunca emojis dentro de la imagen. Los emojis siempre los pone Discord de forma nativa en el texto de los mensajes, así nunca salen "bugueados". Si el motor de canvas llegara a fallar en tu entorno por lo que sea, el bot lo detecta y sigue con un resultado en texto en vez de romper la secuencia.
 
 ## Comandos

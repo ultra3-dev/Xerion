@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.6.9 — game.js
+ *  XERION v1.7.0 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
