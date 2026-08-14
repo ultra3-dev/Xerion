@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.0 — database.js
+ *  XERION v1.7.5 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -41,11 +41,16 @@ const XERION_USERS_COLUMNS = [
   ['chests_won', 'INTEGER NOT NULL DEFAULT 0'],
   ['aura_infinite_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['king_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['goat_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['arise_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['shields', 'INTEGER NOT NULL DEFAULT 0'],
   ['luck_charms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['revives', 'INTEGER NOT NULL DEFAULT 0'],
   ['last_daily_claim_at', 'TIMESTAMPTZ'],
   ['daily_claims', 'INTEGER NOT NULL DEFAULT 0'],
+  ['current_streak', 'INTEGER NOT NULL DEFAULT 0'],
+  ['best_streak', 'INTEGER NOT NULL DEFAULT 0'],
+  ['streak_visible', 'BOOLEAN NOT NULL DEFAULT TRUE'],
   ['created_at', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()'],
 ];
 
@@ -242,9 +247,13 @@ async function applyRewardToUser(userId, reward) {
       [userId, reward.amount],
     );
   } else if (reward.kind === 'role') {
-    const column =
-      reward.key === 'AURA_INFINITE' ? 'aura_infinite_count' : reward.key === 'KING' ? 'king_count' : 'arise_count';
-    await pool.query(`UPDATE xerion_users SET ${column} = ${column} + 1 WHERE user_id = $1;`, [userId]);
+    const column = {
+      AURA_INFINITE: 'aura_infinite_count',
+      KING: 'king_count',
+      GOAT: 'goat_count',
+      ARISE: 'arise_count',
+    }[reward.key];
+    if (column) await pool.query(`UPDATE xerion_users SET ${column} = ${column} + 1 WHERE user_id = $1;`, [userId]);
   }
   // 'none' no toca la fila — no le tocó nada, literalmente.
 }
@@ -294,6 +303,7 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
       const roleColumn = {
         AURA_INFINITE: 'aura_infinite_count',
         KING: 'king_count',
+        GOAT: 'goat_count',
         ARISE: 'arise_count',
       }[reward.key];
       if (roleColumn) {
@@ -504,7 +514,7 @@ async function getEnabledNotificationUserIds() {
 async function getShopCounts(userId) {
   await ensureUser(userId);
   const { rows } = await pool.query(
-    `SELECT feathers, shields, luck_charms FROM xerion_users WHERE user_id = $1;`,
+    `SELECT feathers, shields, luck_charms, revives FROM xerion_users WHERE user_id = $1;`,
     [userId],
   );
   return rows[0];
@@ -517,7 +527,7 @@ async function buyShopItem(userId, column, cost) {
     `UPDATE xerion_users
      SET feathers = feathers - $2, total_feathers_spent = total_feathers_spent + $2, ${column} = ${column} + 1
      WHERE user_id = $1 AND feathers >= $2
-     RETURNING feathers, shields, luck_charms;`,
+     RETURNING feathers, shields, luck_charms, revives;`,
     [userId, cost],
   );
   return rows[0] || null; // null = no tenía suficientes feathers
@@ -529,6 +539,10 @@ async function buyShield(userId) {
 
 async function buyCharm(userId) {
   return buyShopItem(userId, 'luck_charms', SHOP_ITEMS.CHARM.cost);
+}
+
+async function buyRevive(userId) {
+  return buyShopItem(userId, 'revives', SHOP_ITEMS.REVIVE.cost);
 }
 
 async function getShieldCounts(userIds) {
@@ -548,6 +562,23 @@ async function consumeShields(userIds) {
   );
 }
 
+async function getReviveCounts(userIds) {
+  if (userIds.length === 0) return new Map();
+  const { rows } = await pool.query(
+    `SELECT user_id, revives FROM xerion_users WHERE user_id = ANY($1::text[]);`,
+    [userIds],
+  );
+  return new Map(rows.map((r) => [r.user_id, r.revives]));
+}
+
+async function consumeRevives(userIds) {
+  if (userIds.length === 0) return;
+  await pool.query(
+    `UPDATE xerion_users SET revives = GREATEST(revives - 1, 0) WHERE user_id = ANY($1::text[]);`,
+    [userIds],
+  );
+}
+
 /** Consume un amuleto de suerte de forma atómica. Devuelve true si tenía uno disponible. */
 async function consumeLuckCharmIfAvailable(userId) {
   await ensureUser(userId);
@@ -558,6 +589,12 @@ async function consumeLuckCharmIfAvailable(userId) {
   return rowCount > 0;
 }
 
+/**
+ * Reclama la recompensa diaria y actualiza la racha:
+ * - Si el último claim fue hace menos de 48h, la racha continúa (+1).
+ * - Si no (o es el primer claim de todos), la racha se reinicia a 1.
+ * El cooldown de 24h para poder reclamar de nuevo no cambia.
+ */
 async function claimDaily(userId, identity = {}) {
   await ensureUser(userId, identity);
   const { rows } = await pool.query(
@@ -565,18 +602,48 @@ async function claimDaily(userId, identity = {}) {
      SET feathers = feathers + 25,
          total_feathers_earned = total_feathers_earned + 25,
          daily_claims = daily_claims + 1,
+         current_streak = CASE
+           WHEN last_daily_claim_at IS NOT NULL AND last_daily_claim_at >= NOW() - INTERVAL '48 hours'
+             THEN current_streak + 1
+           ELSE 1
+         END,
+         best_streak = GREATEST(
+           best_streak,
+           CASE
+             WHEN last_daily_claim_at IS NOT NULL AND last_daily_claim_at >= NOW() - INTERVAL '48 hours'
+               THEN current_streak + 1
+             ELSE 1
+           END
+         ),
          last_daily_claim_at = NOW()
      WHERE user_id = $1
        AND (last_daily_claim_at IS NULL OR last_daily_claim_at <= NOW() - INTERVAL '24 hours')
-     RETURNING feathers, daily_claims, last_daily_claim_at;`,
+     RETURNING feathers, daily_claims, last_daily_claim_at, current_streak, best_streak, streak_visible;`,
     [userId],
   );
   if (rows[0]) return { claimed: true, reward: 25, ...rows[0] };
   const { rows: current } = await pool.query(
-    `SELECT feathers, daily_claims, last_daily_claim_at FROM xerion_users WHERE user_id = $1;`,
+    `SELECT feathers, daily_claims, last_daily_claim_at, current_streak, best_streak, streak_visible FROM xerion_users WHERE user_id = $1;`,
     [userId],
   );
   return { claimed: false, reward: 0, ...current[0] };
+}
+
+/** Activa o desactiva que la racha se muestre en el apodo del usuario. */
+async function setStreakVisible(userId, visible) {
+  await ensureUser(userId);
+  await pool.query(`UPDATE xerion_users SET streak_visible = $2 WHERE user_id = $1;`, [userId, visible]);
+}
+
+/**
+ * Reinicia por completo los datos de alguien que ya no está en el servidor,
+ * para que el top nunca lo muestre y no arrastre errores si vuelve a entrar
+ * más adelante — arranca desde cero, como un usuario nuevo.
+ */
+async function resetUserData(userId) {
+  await pool.query(`DELETE FROM xerion_chest_awards WHERE user_id = $1;`, [userId]);
+  await pool.query(`DELETE FROM xerion_notifications WHERE user_id = $1;`, [userId]);
+  await pool.query(`DELETE FROM xerion_users WHERE user_id = $1;`, [userId]);
 }
 
 async function getRecentAwards(userId, limit = 10) {
@@ -618,9 +685,14 @@ module.exports = {
   getShopCounts,
   buyShield,
   buyCharm,
+  buyRevive,
   getShieldCounts,
   consumeShields,
+  getReviveCounts,
+  consumeRevives,
   consumeLuckCharmIfAvailable,
   claimDaily,
+  setStreakVisible,
+  resetUserData,
   getRecentAwards,
 };

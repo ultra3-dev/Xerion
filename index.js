@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.0 — index.js
+ *  XERION v1.7.5 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -217,16 +217,17 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/inventory</code></td><td>Quick balance and item check</td></tr>
         <tr><td><code>/leaderboard</code></td><td>Top Feather holders on the server</td></tr>
         <tr><td><code>/rates</code></td><td>Full odds for all 3 chest tiers</td></tr>
-        <tr><td><code>/shop</code></td><td>Spend Feathers on Shields and Luck Charms</td></tr>
+        <tr><td><code>/shop</code></td><td>Spend Feathers on Shields, Luck Charms and Phoenix Feathers</td></tr>
         <tr><td><code>/notification</code></td><td>Toggle a DM alert for when a chest appears</td></tr>
         <tr><td><code>/stats</code></td><td>Server-wide Xerion stats</td></tr>
         <tr><td><code>/help</code></td><td>List every command</td></tr>
         <tr><td><code>/chest</code></td><td>Live status, channel counters and current chance</td></tr>
-        <tr><td><code>/daily</code> · <code>/claim</code></td><td>Claim 25 Feathers every 24 hours</td></tr>
+        <tr><td><code>/daily</code></td><td>Claim 25 Feathers every 24 hours and build your streak</td></tr>
+        <tr><td><code>/claim</code></td><td>Claim a chest you already won but haven't opened yet</td></tr>
         <tr><td><code>/history</code></td><td>Review your latest rewards</td></tr>
         <tr><td><code>/achievements</code></td><td>Track permanent Xerion milestones</td></tr>
         <tr><td><code>/rank</code> · <code>/rewards</code></td><td>See progress and reward summaries</td></tr>
-        <tr><td><code>/streak</code></td><td>Review participation and daily activity</td></tr>
+        <tr><td><code>/streak</code></td><td>Your daily streak, and whether it shows on your nickname</td></tr>
         <tr><td><code>/ping</code> · <code>/about</code> · <code>/rules</code></td><td>Diagnostics, version and game rules</td></tr>
         <tr><td><code>${CONFIG.PREFIX} spawn</code></td><td>Owner-only — force a chest to appear</td></tr>
       </table>

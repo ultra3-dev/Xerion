@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.0 — game.js
+ *  XERION v1.7.5 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -338,20 +338,38 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
     if (candidates.length === 0) candidates = [...remaining]; // si todos tienen escudo, el juego no puede estancarse
 
     const cappedBatch = Math.min(batchSize, remaining.length - 1, candidates.length);
-    const eliminated = [];
+    const picked = [];
     const pool = [...candidates];
     for (let i = 0; i < cappedBatch; i++) {
       const idx = randomInt(pool.length);
       const pickedId = pool[idx];
       pool.splice(idx, 1);
-      eliminated.push(pickedId);
+      picked.push(pickedId);
     }
+
+    // Pluma Fénix: de los elegidos para caer, cualquiera con una pluma
+    // disponible revive automáticamente y sigue en juego — la pluma se
+    // consume igual, haya funcionado o no.
+    let revivedThisRound = new Set();
+    if (picked.length > 0) {
+      try {
+        const reviveMap = await db.getReviveCounts(picked);
+        for (const id of picked) if ((reviveMap.get(id) || 0) > 0) revivedThisRound.add(id);
+      } catch (err) {
+        console.error('[Xerion] Error consultando plumas fénix:', err);
+      }
+    }
+    const eliminated = picked.filter((id) => !revivedThisRound.has(id));
+
     remaining = remaining.filter((id) => !eliminated.includes(id));
     state.remainingIds = [...remaining];
     await persistChestState(state);
 
     if (round === 1 && shieldedThisRound.size > 0) {
       db.consumeShields([...shieldedThisRound]).catch((err) => console.error('[Xerion] Error consumiendo escudos:', err));
+    }
+    if (revivedThisRound.size > 0) {
+      db.consumeRevives([...revivedThisRound]).catch((err) => console.error('[Xerion] Error consumiendo plumas fénix:', err));
     }
 
     if (eliminated.length > 0) {
@@ -362,6 +380,14 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
     } else if (round === 1 && shieldedThisRound.size > 0) {
       await channel
         .send({ content: `🛡️ **Todos los Escudos de Xerion protegieron a sus dueños en esta ronda — nadie cae... por ahora.**`, allowedMentions: SAFE_MENTIONS })
+        .catch(() => {});
+    }
+
+    if (revivedThisRound.size > 0) {
+      const revivedIds = [...revivedThisRound];
+      const names = revivedIds.map((id) => `<@${id}>`);
+      await channel
+        .send({ content: `🪶🔥 ${formatSpanishList(names)} volvió de entre los caídos gracias a su Pluma Fénix.`, allowedMentions: pingOnly(revivedIds) })
         .catch(() => {});
     }
 
@@ -488,6 +514,26 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
     .catch((err) => console.error('[Xerion] Error enviando el embed de resultado:', err));
 }
 
+/** Busca, entre los cofres activos en memoria, uno que el usuario ya ganó pero no ha abierto. */
+function findPendingChestForUser(userId) {
+  for (const [channelId, state] of activeChests.entries()) {
+    if (state.status === 'awaiting_open' && state.winnerId === userId) {
+      return { channelId, state };
+    }
+  }
+  return null;
+}
+
+/** Ejecuta la apertura de un cofre ya ganado — usada tanto por el botón Open como por /claim. */
+async function finalizeChestOpen(channel, state) {
+  state.status = 'opening';
+  state.openingClaimed = true;
+  await persistChestState(state);
+  await openChestSequence(channel, state.winnerId, state.chestType, state);
+  activeChests.delete(channel.id);
+  await clearPersistedChest(channel.id);
+}
+
 async function handleOpenChest(interaction) {
   const state = activeChests.get(interaction.channelId);
   const expectedCustomId = state ? `xerion_open_${state.winnerId}` : null;
@@ -499,19 +545,13 @@ async function handleOpenChest(interaction) {
     return interaction.reply({ content: "This isn't your chest to open.", flags: MessageFlags.Ephemeral });
   }
 
-  state.status = 'opening';
-  state.openingClaimed = true;
-  await persistChestState(state);
   await interaction.deferUpdate();
   await interaction.message.edit({
     components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)],
     flags: MessageFlags.IsComponentsV2,
   }).catch(() => {});
 
-  const chestType = state.chestType;
-  await openChestSequence(interaction.channel, state.winnerId, chestType, state);
-  activeChests.delete(interaction.channelId);
-  await clearPersistedChest(interaction.channelId);
+  await finalizeChestOpen(interaction.channel, state);
 }
 
 // ============================================================================
@@ -520,7 +560,7 @@ async function handleOpenChest(interaction) {
 
 async function handleShopBuy(interaction, itemKey) {
   const item = SHOP_ITEMS[itemKey];
-  const buyFn = itemKey === 'SHIELD' ? db.buyShield : db.buyCharm;
+  const buyFn = itemKey === 'SHIELD' ? db.buyShield : itemKey === 'CHARM' ? db.buyCharm : db.buyRevive;
 
   let result;
   try {
@@ -552,6 +592,26 @@ async function handleNotifToggle(interaction) {
   }
 }
 
+async function handleStreakToggle(interaction) {
+  try {
+    const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+    const nextVisible = stats.streak_visible === false;
+    await db.setStreakVisible(interaction.user.id, nextVisible);
+
+    if (nextVisible) {
+      if ((stats.current_streak || 0) > 0) await updateStreakNickname(interaction.member, stats.current_streak).catch(() => {});
+    } else {
+      await clearStreakNickname(interaction.member).catch(() => {});
+    }
+
+    const updated = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+    await interaction.update({ components: [visuals.buildStreakContainer(updated)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  } catch (err) {
+    console.error('[Xerion] Error actualizando visibilidad de racha:', err);
+    await interaction.reply({ content: 'Something went wrong — try again in a moment.', flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+}
+
 // ============================================================================
 // SLASH COMMANDS — definición y registro (con limpieza de comandos viejos)
 // ============================================================================
@@ -579,7 +639,7 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('help').setDescription('List all Xerion commands.'),
   new SlashCommandBuilder().setName('chest').setDescription('See the live chest status and channel chance.'),
   new SlashCommandBuilder().setName('daily').setDescription('Claim 25 Feathers once every 24 hours.'),
-  new SlashCommandBuilder().setName('claim').setDescription('Shortcut to claim your daily Feathers.'),
+  new SlashCommandBuilder().setName('claim').setDescription('Claim a chest you already won but haven\'t opened yet.'),
   new SlashCommandBuilder().setName('history').setDescription('View your latest chest rewards.'),
   new SlashCommandBuilder().setName('achievements').setDescription('View your Xerion achievements.'),
   new SlashCommandBuilder().setName('rank').setDescription('View your rank and next milestone.'),
@@ -776,17 +836,65 @@ function identityFor(user) {
   return { username: user.username, displayName: user.displayName || user.globalName || user.username };
 }
 
+const STREAK_SUFFIX_RE = /\s*\(🔥\d+\)\s*$/;
+
+/** Actualiza el apodo del usuario para mostrar su racha, ej. "nombre (🔥3)". Falla en silencio (permisos/jerarquía). */
+async function updateStreakNickname(member, streak) {
+  if (!member) return;
+  try {
+    const base = (member.displayName || '').replace(STREAK_SUFFIX_RE, '');
+    const nextNick = `${base} (🔥${streak})`.slice(0, 32);
+    if (member.displayName !== nextNick) await member.setNickname(nextNick);
+  } catch (err) {
+    console.error('[Xerion] No se pudo actualizar el apodo con la racha:', err.message);
+  }
+}
+
+/** Quita el sufijo de racha del apodo del usuario, si lo tiene. Falla en silencio. */
+async function clearStreakNickname(member) {
+  if (!member) return;
+  try {
+    const base = (member.displayName || '').replace(STREAK_SUFFIX_RE, '');
+    if (base !== member.displayName) await member.setNickname(base);
+  } catch (err) {
+    console.error('[Xerion] No se pudo limpiar el apodo de la racha:', err.message);
+  }
+}
+
+/**
+ * Resuelve nombres para el top y, de paso, lo mantiene sin bugs: verifica en
+ * un solo llamado a la API quiénes siguen en el servidor. A quien ya no está
+ * se le excluye del top y se le reinician sus datos, para que si vuelve a
+ * entrar arranque limpio y no queden filas fantasma.
+ */
 async function hydrateLeaderboardRows(guild, rows) {
-  return Promise.all(
-    rows.map(async (row) => {
-      if (row.display_name && row.display_name !== 'unknown-user') return row;
-      const member = await guild?.members.fetch(row.user_id).catch(() => null);
-      return {
-        ...row,
-        resolved_name: member?.displayName || member?.user?.globalName || member?.user?.username || 'Usuario no disponible',
-      };
-    }),
-  );
+  if (!guild || rows.length === 0) return rows;
+
+  let memberMap = new Map();
+  try {
+    const fetched = await guild.members.fetch({ user: rows.map((row) => row.user_id) });
+    memberMap = new Map(fetched.map((member) => [member.id, member]));
+  } catch (err) {
+    console.error('[Xerion] No se pudo verificar quién sigue en el servidor para el top:', err.message);
+    // Si la API falla, mejor mostrar el top tal cual que arriesgarnos a vaciarlo por error.
+    return rows.map((row) => ({ ...row, resolved_name: row.display_name || 'Usuario no disponible' }));
+  }
+
+  const result = [];
+  for (const row of rows) {
+    const member = memberMap.get(row.user_id);
+    if (!member) {
+      db.resetUserData(row.user_id).catch((err) =>
+        console.error('[Xerion] Error reiniciando datos de alguien que ya no está en el servidor:', err.message),
+      );
+      continue;
+    }
+    result.push({
+      ...row,
+      resolved_name: member.displayName || member.user?.globalName || member.user?.username,
+    });
+  }
+  return result;
 }
 
 async function sendV2(interaction, container, ephemeral = false) {
@@ -804,7 +912,33 @@ async function cmdChest(interaction) {
 
 async function cmdDaily(interaction) {
   const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user));
+  if (result.claimed && result.streak_visible !== false) {
+    updateStreakNickname(interaction.member, result.current_streak).catch(() => {});
+  }
   return sendV2(interaction, visuals.buildDailyContainer(result), true);
+}
+
+async function cmdClaim(interaction) {
+  const pending = findPendingChestForUser(interaction.user.id);
+  if (!pending) {
+    return interaction.reply({
+      content: 'No tienes ningún cofre pendiente por abrir ahora mismo. Primero tienes que ganar uno participando y sobreviviendo a la eliminación.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+  const { channelId, state } = pending;
+  await interaction.reply({ content: `🔓 Reclamando tu cofre pendiente en <#${channelId}>...`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+  if (state.messageId) {
+    const chestMessage = await channel.messages.fetch(state.messageId).catch(() => null);
+    if (chestMessage) {
+      await chestMessage
+        .edit({ components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)], flags: MessageFlags.IsComponentsV2 })
+        .catch(() => {});
+    }
+  }
+  await finalizeChestOpen(channel, state);
 }
 
 async function cmdHistory(interaction) {
@@ -855,7 +989,8 @@ async function handleSlashCommand(interaction) {
     case 'stats': return cmdStats(interaction);
     case 'help': return cmdHelp(interaction);
     case 'chest': return cmdChest(interaction);
-    case 'daily': case 'claim': return cmdDaily(interaction);
+    case 'daily': return cmdDaily(interaction);
+    case 'claim': return cmdClaim(interaction);
     case 'history': return cmdHistory(interaction);
     case 'achievements': return cmdAchievements(interaction);
     case 'rank': return cmdRank(interaction);
@@ -955,7 +1090,32 @@ async function prefixChest(message) {
 
 async function prefixDaily(message) {
   const result = await db.claimDaily(message.author.id, identityFor(message.author));
+  if (result.claimed && result.streak_visible !== false) {
+    updateStreakNickname(message.member, result.current_streak).catch(() => {});
+  }
   return noPingReply(message, { components: [visuals.buildDailyContainer(result)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixClaim(message) {
+  const pending = findPendingChestForUser(message.author.id);
+  if (!pending) {
+    return noPingReply(message, {
+      content: 'No tienes ningún cofre pendiente por abrir ahora mismo. Primero tienes que ganar uno participando y sobreviviendo a la eliminación.',
+    });
+  }
+  const { channelId, state } = pending;
+  await noPingReply(message, { content: `🔓 Reclamando tu cofre pendiente en <#${channelId}>...` }).catch(() => {});
+  const channel = await message.client.channels.fetch(channelId).catch(() => null);
+  if (!channel) return;
+  if (state.messageId) {
+    const chestMessage = await channel.messages.fetch(state.messageId).catch(() => null);
+    if (chestMessage) {
+      await chestMessage
+        .edit({ components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)], flags: MessageFlags.IsComponentsV2 })
+        .catch(() => {});
+    }
+  }
+  await finalizeChestOpen(channel, state);
 }
 
 async function prefixHistory(message) {
@@ -1013,7 +1173,8 @@ async function handlePrefixCommand(message) {
       case 'notification': case 'notif': return await prefixNotification(message);
       case 'stats': return await prefixStats(message);
       case 'chest': case 'cofre': return await prefixChest(message);
-      case 'daily': case 'claim': return await prefixDaily(message);
+      case 'daily': return await prefixDaily(message);
+      case 'claim': return await prefixClaim(message);
       case 'history': case 'historial': return await prefixHistory(message);
       case 'achievements': case 'logros': return await prefixAchievements(message);
       case 'rank': case 'rango': return await prefixRank(message);
@@ -1070,7 +1231,9 @@ async function handleInteraction(interaction) {
       if (id.startsWith('xerion_open_')) return await handleOpenChest(interaction);
       if (id === 'xerion_buy_shield') return await handleShopBuy(interaction, 'SHIELD');
       if (id === 'xerion_buy_charm') return await handleShopBuy(interaction, 'CHARM');
+      if (id === 'xerion_buy_revive') return await handleShopBuy(interaction, 'REVIVE');
       if (id === 'xerion_notif_toggle') return await handleNotifToggle(interaction);
+      if (id === 'xerion_streak_toggle') return await handleStreakToggle(interaction);
       if (id.startsWith('xerion_leaderboard_prev_') || id.startsWith('xerion_leaderboard_next_')) {
         const currentPage = Number(id.split('_').pop()) || 0;
         const nextPage = id.includes('_prev_') ? currentPage - 1 : currentPage + 1;

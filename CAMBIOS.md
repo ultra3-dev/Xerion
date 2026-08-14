@@ -1,3 +1,42 @@
+# Xerion v1.7.5 — Qué cambió
+
+## Rol nuevo: GOAT
+
+- Se agregó <@&1537232162246496346> **GOAT** 🐐 como tercer mejor rol del cofre, justo después de KING (y antes de AURA INFINITE). Orden de rareza: ARISE > KING > GOAT > AURA INFINITE.
+- Probabilidad propia por tier (Ceniza 0.48% · Brasa 1.2% · Abismo 3.3%) — cada tabla se rebalanceó restándole ese porcentaje a "Nothing", así que las 3 tablas siguen sumando exactamente 100%.
+- Aparece ya en `/profile`, `/inventory`, `/achievements`, `/rates`, en el flujo de apertura y en la asignación de rol — todo ordenado por rareza en cada panel.
+
+## Tienda más difícil, con 3 objetos
+
+- Escudo de Xerion: 100 → **140** plumas. Amuleto de Suerte: 150 → **220** plumas.
+- Objeto nuevo: **Pluma Fénix** 🪶 (400 plumas) — si te eliminan en la batalla, revives una vez y sigues en juego hasta la siguiente ronda. Se consume al usarse, funcione o no.
+
+## `/claim` ahora reclama cofres, no el daily
+
+- Antes `/claim` y `/daily` eran literalmente el mismo comando por error — ya están separados.
+- `/claim` (y `xn claim`) busca si ganaste un cofre que no habías abierto (aunque el mensaje original ya haya quedado arriba en el chat) y lo abre directo. Sigue funcionando incluso si el bot se reinició mientras tanto.
+- Para que exista algo que reclamar, primero hay que haber participado y sobrevivido a la eliminación — `/claim` no es un atajo para saltarse el juego.
+
+## Racha de `/daily` en el apodo
+
+- `/daily` ahora calcula una racha real (se mantiene si reclamas dentro de 48h del último claim, se reinicia a 1 si dejas pasar más).
+- Si la visibilidad está activada (por defecto sí), tu apodo se actualiza solo a algo como `nombre (🔥3)`.
+- Panel `/streak` nuevo: muestra racha actual, mejor racha, y un botón para activar/desactivar que se muestre en tu apodo.
+
+## Top sin bugs
+
+- El leaderboard ahora verifica en un solo llamado a Discord quién sigue realmente en el servidor. A quien ya no está se le excluye del top y se le reinician sus datos por completo (incluye historial de cofres y notificaciones) — si vuelve a entrar, arranca limpio, sin filas fantasma ni "Usuario no disponible".
+
+## Tips aleatorios
+
+- Nueve tips distintos sobre `/notification`, `/claim`, `/streak`, la tienda, etc. Aparecen con ~20% de probabilidad al final de varios paneles (perfil, inventario, ayuda, historial, logros, rango, recompensas, daily, streak, stats...) — nunca siempre, para que no se sienta como un manual pegado.
+
+## Eliminación a ritmo de 3 segundos
+
+- Cada ronda de eliminación ahora hace una pausa fija de 3s antes de la siguiente — le da tiempo a la gente de leer quién cayó.
+
+---
+
 # Xerion v1.7.0 — Qué cambió
 
 ## Corrección de compatibilidad con bases existentes

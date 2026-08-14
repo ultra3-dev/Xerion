@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.0 — config.js
+ *  XERION v1.7.5 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.7.0',
+  VERSION: '1.7.5',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -30,6 +30,7 @@ const CONFIG = {
   ROLE_IDS: {
     AURA_INFINITE: '1494579589752684614',
     KING: '1531508465174970518',
+    GOAT: '1537232162246496346',
     ARISE: '1531512361104572507',
   },
 
@@ -46,11 +47,11 @@ const CONFIG = {
   JOIN_WINDOW_MS: 5 * 60 * 1000, // 5 minutos para pulsar "Participate"
 
   // Ritmo del minijuego de eliminación
-  // La animación conserva ritmo, pero las acciones del usuario no esperan
-  // pausas artificiales largas.
+  // Pausa deliberada de 3 segundos entre cada ronda de eliminación — le da
+  // tiempo a la gente de leer quién cayó antes de que llegue la siguiente.
   INTRO_DELAY_MS: 250,
-  ELIMINATION_DELAY_MIN_MS: 350,
-  ELIMINATION_DELAY_MAX_MS: 650,
+  ELIMINATION_DELAY_MIN_MS: 3000,
+  ELIMINATION_DELAY_MAX_MS: 3000,
   BATCH_THRESHOLD: 10,
   BATCH_FRACTION: 0.25,
 
@@ -59,6 +60,7 @@ const CONFIG = {
     FEATHERS: 0xff9f43,
     AURA_INFINITE: 0x8b5cf6,
     KING: 0xe8b613,
+    GOAT: 0xcd7f32,
     ARISE: 0x9d0208,
     NOTHING: 0x57534e,
     DARK: 0x1a1410,
@@ -101,6 +103,10 @@ function buildRewardTable(t) {
       kind: 'role', roleId: CONFIG.ROLE_IDS.KING, mention: `<@&${CONFIG.ROLE_IDS.KING}>`,
     },
     {
+      key: 'GOAT', label: 'GOAT', emoji: '🐐', chance: t.goat, color: CONFIG.COLORS.GOAT,
+      kind: 'role', roleId: CONFIG.ROLE_IDS.GOAT, mention: `<@&${CONFIG.ROLE_IDS.GOAT}>`,
+    },
+    {
       key: 'AURA_INFINITE', label: 'AURA INFINITE', emoji: '🌌', chance: t.aura, color: CONFIG.COLORS.AURA_INFINITE,
       kind: 'role', roleId: CONFIG.ROLE_IDS.AURA_INFINITE, mention: `<@&${CONFIG.ROLE_IDS.AURA_INFINITE}>`,
     },
@@ -123,7 +129,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.CENIZA,
     weight: 70,
     flavor: 'Lo más habitual. La mayoría de las veces no guarda nada — pero "la mayoría" no es "siempre".',
-    rewardTable: buildRewardTable({ arise: 0.15, king: 0.35, aura: 0.6, feathers: 6, featherMin: 8, featherMax: 15, nothing: 92.9 }),
+    rewardTable: buildRewardTable({ arise: 0.15, king: 0.35, goat: 0.48, aura: 0.6, feathers: 6, featherMin: 8, featherMax: 15, nothing: 92.42 }),
   },
   BRASA: {
     key: 'BRASA',
@@ -133,7 +139,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.BRASA,
     weight: 25,
     flavor: 'Arde distinto. Las probabilidades de premio se cuadruplican frente a un cofre común.',
-    rewardTable: buildRewardTable({ arise: 0.4, king: 0.9, aura: 1.6, feathers: 12, featherMin: 15, featherMax: 30, nothing: 85.1 }),
+    rewardTable: buildRewardTable({ arise: 0.4, king: 0.9, goat: 1.2, aura: 1.6, feathers: 12, featherMin: 15, featherMax: 30, nothing: 83.9 }),
   },
   ABISMO: {
     key: 'ABISMO',
@@ -143,7 +149,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.ABISMO,
     weight: 5,
     flavor: 'Casi nunca aparece. Sigue sin ser fácil — pero es lo más cerca que vas a estar de un rol legendario.',
-    rewardTable: buildRewardTable({ arise: 1.2, king: 2.5, aura: 4.3, feathers: 25, featherMin: 30, featherMax: 60, nothing: 67.0 }),
+    rewardTable: buildRewardTable({ arise: 1.2, king: 2.5, goat: 3.3, aura: 4.3, feathers: 25, featherMin: 30, featherMax: 60, nothing: 63.7 }),
   },
 };
 
@@ -174,15 +180,22 @@ const SHOP_ITEMS = {
     key: 'SHIELD',
     name: 'Escudo de Xerion',
     emoji: '🛡️',
-    cost: 100,
+    cost: 140,
     description: 'Objeto raro: te protege automáticamente si te toca caer en la **primera ronda** de tu próxima batalla. Se consume al usarse.',
   },
   CHARM: {
     key: 'CHARM',
     name: 'Amuleto de Suerte',
     emoji: '🍀',
-    cost: 150,
+    cost: 220,
     description: 'Objeto legendario: la próxima vez que abras un cofre, tus probabilidades de conseguir un **rol** suben un 50%. Se consume al usarse.',
+  },
+  REVIVE: {
+    key: 'REVIVE',
+    name: 'Pluma Fénix',
+    emoji: '🪶',
+    cost: 400,
+    description: 'Objeto mítico: si te eliminan en una batalla, revives una única vez y sigues en juego hasta la siguiente ronda. Se consume al usarse, funcione o no.',
   },
 };
 
@@ -293,6 +306,35 @@ function pingOnly(userIds) {
   return { parse: [], users: [...new Set(userIds)] };
 }
 
+// ============================================================================
+// TIPS — pequeños consejos que aparecen a veces (nunca siempre) al fondo de
+// algunos paneles, para que la gente descubra comandos y objetos sin que
+// se sienta como un manual pegado encima del diseño.
+// ============================================================================
+
+const TIPS = [
+  'Activa `/notification` para recibir un DM apenas aparezca un cofre — así nunca llegas tarde.',
+  'Si ganaste un cofre y no lo abriste a tiempo, usa `/claim` para reclamarlo aunque el mensaje ya haya quedado arriba en el chat.',
+  'Tu racha de `/daily` se puede mostrar en tu apodo — revisa `/streak` para activarla o desactivarla.',
+  'Un Escudo de `/shop` te protege automáticamente en la primera ronda de tu próxima batalla.',
+  'La Pluma Fénix es cara, pero te revive una vez si te eliminan — puede ser tu única oportunidad de seguir en juego.',
+  'Con `/rates` puedes ver exactamente qué tan difícil es cada tipo de cofre antes de arriesgarte.',
+  'El Cofre del Abismo es rarísimo, pero cuadruplica tus probabilidades de rol frente al Cofre de Ceniza.',
+  'No te saltes tu `/daily`: dejar pasar más de un día reinicia tu racha desde cero.',
+  'Un Amuleto de Suerte sube un 50% tus probabilidades de conseguir un rol en tu próxima apertura.',
+];
+
+const TIP_SHOW_CHANCE = 0.2; // ~1 de cada 5 veces, para que se sienta ocasional y no repetitivo
+
+function pickRandomTip() {
+  return TIPS[randomInt(TIPS.length)];
+}
+
+/** Devuelve una línea de tip formateada al azar, o cadena vacía la mayoría de las veces. */
+function maybeTipLine() {
+  return Math.random() < TIP_SHOW_CHANCE ? `💡 **Tip:** ${pickRandomTip()}` : '';
+}
+
 console.log(`[Xerion] Configuración cargada — v${CONFIG.VERSION}`);
 
 module.exports = {
@@ -318,4 +360,7 @@ module.exports = {
   isOnCooldown,
   SAFE_MENTIONS,
   pingOnly,
+  TIPS,
+  pickRandomTip,
+  maybeTipLine,
 };

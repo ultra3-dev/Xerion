@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.6.9 — visuals.js
+ *  XERION v1.7.5 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -37,6 +37,7 @@ const {
   rollFeatherAmount,
   computeSpawnChance,
   messagesUntilNextIncrease,
+  maybeTipLine,
 } = require('./config.js');
 
 // ============================================================================
@@ -323,6 +324,7 @@ function buildSpinContainer(chestType, attachmentName = 'spin.png') {
 const RESULT_FLAVOR = {
   ARISE: 'Lo imposible, posible. El cofre casi nunca es tan generoso.',
   KING: 'El cofre te corona. No todos pueden decir lo mismo.',
+  GOAT: 'El tercer trono también es tuyo. Muy pocos llegan a esta altura.',
   AURA_INFINITE: 'Pocos llegan tan lejos. Hoy la suerte estuvo de tu lado.',
   FEATHERS: 'No es el premio mayor, pero suma para la próxima — o para la tienda.',
   NOTHING: 'El cofre estaba vacío para ti esta vez. Así de cruel es Xerion.',
@@ -358,11 +360,20 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)
 // estos paneles con allowedMentions: SAFE_MENTIONS.
 // ============================================================================
 
+/** Añade, solo a veces (ver TIP_SHOW_CHANCE), una línea de tip al final de un container. Muta y devuelve el mismo container. */
+function addTipFooter(container) {
+  const tip = maybeTipLine();
+  if (!tip) return container;
+  return container
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${tip}`));
+}
+
 function buildProfileContainer(stats, discordUser) {
   const winRate =
     stats.chests_participated > 0 ? ((stats.chests_won / stats.chests_participated) * 100).toFixed(1) : '0.0';
 
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.BRAND)
     .addSectionComponents(
       new SectionBuilder()
@@ -398,6 +409,7 @@ function buildProfileContainer(stats, discordUser) {
       new TextDisplayBuilder().setContent(
         [
           `🌌 **AURA INFINITE:** ${formatNumber(stats.aura_infinite_count)}`,
+          `🐐 **GOAT:** ${formatNumber(stats.goat_count)}`,
           `👑 **KING:** ${formatNumber(stats.king_count)}`,
           `💀 **ARISE:** ${formatNumber(stats.arise_count)}`,
         ].join('\n'),
@@ -409,28 +421,32 @@ function buildProfileContainer(stats, discordUser) {
         [
           `${SHOP_ITEMS.SHIELD.emoji} **Escudos:** ${formatNumber(stats.shields)}`,
           `${SHOP_ITEMS.CHARM.emoji} **Amuletos:** ${formatNumber(stats.luck_charms)}`,
+          `${SHOP_ITEMS.REVIVE.emoji} **Plumas Fénix:** ${formatNumber(stats.revives)}`,
         ].join('\n'),
       ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Player since <t:${toUnixSeconds(stats.created_at)}:D>`));
+  addTipFooter(container);
+  return container;
 }
 
 function buildQuickInventoryContainer(stats, discordUser) {
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.FEATHERS)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
           `**${discordUser.username}'s Inventory**`,
           `${FEATHER_EMOJI} **${formatNumber(stats.feathers)}** Feathers`,
-          `🌌 ${stats.aura_infinite_count}  ·  👑 ${stats.king_count}  ·  💀 ${stats.arise_count}`,
-          `${SHOP_ITEMS.SHIELD.emoji} ${stats.shields} Escudo(s)  ·  ${SHOP_ITEMS.CHARM.emoji} ${stats.luck_charms} Amuleto(s)`,
+          `🌌 ${stats.aura_infinite_count}  ·  🐐 ${stats.goat_count}  ·  👑 ${stats.king_count}  ·  💀 ${stats.arise_count}`,
+          `${SHOP_ITEMS.SHIELD.emoji} ${stats.shields} Escudo(s)  ·  ${SHOP_ITEMS.CHARM.emoji} ${stats.luck_charms} Amuleto(s)  ·  ${SHOP_ITEMS.REVIVE.emoji} ${stats.revives} Pluma(s) Fénix`,
         ].join('\n'),
       ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Usa `/profile` para el detalle completo o `/shop` para gastar tus Feathers'));
+  return addTipFooter(container);
 }
 
 function buildLeaderboardContainer(rows, page = 0, totalPages = 1) {
@@ -511,17 +527,32 @@ function buildShopContainer(shopCounts) {
       ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `### ${SHOP_ITEMS.REVIVE.emoji} ${SHOP_ITEMS.REVIVE.name} — \`${SHOP_ITEMS.REVIVE.cost}\` ${FEATHER_EMOJI}`,
+          `> ${SHOP_ITEMS.REVIVE.description}`,
+          `-# Tienes: **${shopCounts.revives}**`,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('xerion_buy_shield')
-          .setLabel(`Comprar Escudo (${SHOP_ITEMS.SHIELD.cost})`)
+          .setLabel(`Escudo (${SHOP_ITEMS.SHIELD.cost})`)
           .setEmoji(SHOP_ITEMS.SHIELD.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('xerion_buy_charm')
-          .setLabel(`Comprar Amuleto (${SHOP_ITEMS.CHARM.cost})`)
+          .setLabel(`Amuleto (${SHOP_ITEMS.CHARM.cost})`)
           .setEmoji(SHOP_ITEMS.CHARM.emoji)
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('xerion_buy_revive')
+          .setLabel(`Pluma Fénix (${SHOP_ITEMS.REVIVE.cost})`)
+          .setEmoji(SHOP_ITEMS.REVIVE.emoji)
           .setStyle(ButtonStyle.Secondary),
       ),
     );
@@ -556,7 +587,7 @@ function buildStatsContainer(serverStats) {
   const chance = computeSpawnChance(serverStats.messages_since_chest);
   const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest);
 
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.BRAND)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Xerion Server Stats\n-# v${CONFIG.VERSION}`))
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
@@ -581,6 +612,7 @@ function buildStatsContainer(serverStats) {
         ].join('\n'),
       ),
     );
+  return addTipFooter(container);
 }
 
 /** Panel enviado por DM a quien tenga las notificaciones activadas cuando aparece un cofre. */
@@ -606,7 +638,7 @@ function buildChestAlertContainer(chestType, jumpUrl) {
 }
 
 function buildHelpContainer() {
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.BRAND)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Xerion\n-# v${CONFIG.VERSION} · Chest-drop & elimination game`))
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
@@ -623,12 +655,13 @@ function buildHelpContainer() {
           '`/stats` [`xn stats`] — estadísticas del servidor',
            '`/help` [`xn help`] — este menú',
            '`/chest` [`xn chest`] — estado del cofre y probabilidad actual',
-           '`/daily` [`xn daily`] — reclama 25 Feathers cada 24 horas',
+           '`/daily` [`xn daily`] — reclama 25 Feathers cada 24 horas y suma racha',
+           '`/claim` [`xn claim`] — reclama un cofre que ya ganaste pero no habías abierto',
            '`/history` [`xn history`] — últimas recompensas obtenidas',
            '`/achievements` [`xn achievements`] — logros desbloqueados',
            '`/rank` [`xn rank`] — tu posición y progreso',
            '`/rewards` [`xn rewards`] — resumen de recompensas',
-           '`/streak` [`xn streak`] — actividad y racha de reclamaciones',
+           '`/streak` [`xn streak`] — tu racha de dailies, y si se muestra en tu apodo',
            '`/ping` [`xn ping`] — latencia actual del bot',
            '`/about` [`xn about`] — versión y estado de Xerion',
            '`/rules` [`xn rules`] — reglas rápidas del juego',
@@ -648,14 +681,16 @@ function buildHelpContainer() {
         ].join('\n'),
       ),
     );
+  return addTipFooter(container);
 }
 
 function buildSimpleContainer(title, subtitle, lines, accent = CONFIG.COLORS.BRAND) {
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(accent)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${title}\n-# ${subtitle}`))
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+  return addTipFooter(container);
 }
 
 function buildDailyContainer(result) {
@@ -663,7 +698,12 @@ function buildDailyContainer(result) {
     'Daily Drop',
     result.claimed ? 'Recompensa reclamada' : 'Todavía no está disponible',
     result.claimed
-      ? [`✅ Recibiste **+${result.reward} Feathers**.`, `${FEATHER_EMOJI} Saldo actual: **${formatNumber(result.feathers)}**`, `📅 Dailies reclamadas: **${result.daily_claims}**`]
+      ? [
+          `✅ Recibiste **+${result.reward} Feathers**.`,
+          `${FEATHER_EMOJI} Saldo actual: **${formatNumber(result.feathers)}**`,
+          `📅 Dailies reclamadas: **${result.daily_claims}**`,
+          `🔥 Racha actual: **${formatNumber(result.current_streak || 0)}** día(s)${result.streak_visible === false ? ' (oculta de tu apodo)' : ''}`,
+        ]
       : [`⏱️ Ya reclamaste tu recompensa diaria.`, `Disponible <t:${toUnixSeconds(new Date(new Date(result.last_daily_claim_at).getTime() + 24 * 60 * 60 * 1000))}:R>.`, `${FEATHER_EMOJI} Saldo actual: **${formatNumber(result.feathers)}**`],
     CONFIG.COLORS.FEATHERS,
   );
@@ -684,6 +724,7 @@ function buildAchievementsContainer(stats) {
     [stats.total_feathers_earned >= 100, 'Plumaje de acero', 'Consigue 100 Feathers en total.'],
     [stats.aura_infinite_count >= 1, 'Aura despertada', 'Obtén AURA INFINITE.'],
     [stats.king_count >= 1, 'Corona de Xerion', 'Obtén KING.'],
+    [stats.goat_count >= 1, 'Cabra suprema', 'Obtén GOAT.'],
     [stats.arise_count >= 1, 'El que regresa', 'Obtén ARISE.'],
   ];
   const lines = achievements.map(([done, name, description]) => `${done ? '✅' : '⬜'} **${name}** — ${description}`);
@@ -730,17 +771,46 @@ function buildChestStatusContainer(channelId, state, active) {
 }
 
 function buildStreakContainer(stats) {
-  return buildSimpleContainer(
-    'Actividad',
-    'Tu progreso de Xerion',
-    [
-      `💬 **Cofres participados:** ${formatNumber(stats.chests_participated)}`,
-      `🏆 **Cofres ganados:** ${formatNumber(stats.chests_won)}`,
-      `📆 **Dailies reclamadas:** ${formatNumber(stats.daily_claims || 0)}`,
-      `${FEATHER_EMOJI} **Ganado en total:** ${formatNumber(stats.total_feathers_earned)}`,
-    ],
-    CONFIG.COLORS.FEATHERS,
-  );
+  const visible = stats.streak_visible !== false;
+  const container = new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.FEATHERS)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          '# Racha de Daily',
+          '-# Reclama tu `/daily` todos los días para mantenerla viva',
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `🔥 **Racha actual:** ${formatNumber(stats.current_streak || 0)} día(s)`,
+          `🏅 **Mejor racha:** ${formatNumber(stats.best_streak || 0)} día(s)`,
+          `📆 **Dailies reclamadas:** ${formatNumber(stats.daily_claims || 0)}`,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        visible
+          ? `🔥 **Visibilidad en tu apodo:** Activada — se muestra como \`(🔥${formatNumber(stats.current_streak || 0)})\` al final de tu apodo`
+          : '🙈 **Visibilidad en tu apodo:** Desactivada',
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('xerion_streak_toggle')
+          .setLabel(visible ? 'Ocultar de mi apodo' : 'Mostrar en mi apodo')
+          .setEmoji(visible ? '🙈' : '🔥')
+          .setStyle(visible ? ButtonStyle.Secondary : ButtonStyle.Success),
+      ),
+    );
+  return addTipFooter(container);
 }
 
 function buildPingContainer(latency) {
