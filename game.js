@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.5 — game.js
+ *  XERION v1.8.0 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -73,6 +73,8 @@ function chestSnapshot(state) {
     rewardAmount: state.reward?.amount ?? null,
     luckBoosted: Boolean(state.luckBoosted),
     round: Number(state.round || 0),
+    openDeadlineAt: state.openDeadlineAt || null,
+    excludedWinnerIds: [...(state.excludedWinnerIds || [])],
   };
 }
 
@@ -241,6 +243,9 @@ async function handleParticipate(interaction) {
   if (!state || state.status !== 'waiting') {
     return interaction.reply({ content: 'This chest is no longer active.', flags: MessageFlags.Ephemeral });
   }
+  if (interaction.member?.roles?.cache?.has(CONFIG.ROLE_IDS.BLACKLIST)) {
+    return interaction.reply({ content: '🚫 No puedes participar en los cofres.', flags: MessageFlags.Ephemeral });
+  }
   if (state.participants.has(interaction.user.id)) {
     return interaction.reply({ content: "You're already in — good luck.", flags: MessageFlags.Ephemeral });
   }
@@ -289,17 +294,7 @@ async function resolveJoinPhase(channel, state) {
   if (participantIds.length === 1) {
     const winnerId = participantIds[0];
     await db.incrementChestsWon(winnerId).catch((err) => console.error('[Xerion] Error registrando victoria en solitario:', err));
-    state.status = 'awaiting_open';
-    state.winnerId = winnerId;
-    state.remainingIds = [winnerId];
-    await persistChestState(state);
-    await channel
-      .send({
-        components: [visuals.buildWinnerEmbed(winnerId, { solo: true, chestType: state.chestType })],
-        flags: MessageFlags.IsComponentsV2,
-        allowedMentions: pingOnly([winnerId]),
-      })
-      .catch(() => {});
+    await announceWinnerAndArmReroll(channel, state, winnerId, { solo: true });
     return;
   }
 
@@ -396,17 +391,148 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
 
   const winnerId = remaining[0];
   await db.incrementChestsWon(winnerId).catch((err) => console.error('[Xerion] Error registrando victoria:', err));
+  await announceWinnerAndArmReroll(channel, state, winnerId, { solo: false });
+}
+
+/**
+ * Publica el anuncio de ganador, guarda el mensaje real (para que /claim
+ * pueda editarlo) y arma el temporizador de 5 minutos: si nadie reclama a
+ * tiempo, se re-sortea automáticamente entre el resto de participantes.
+ */
+async function announceWinnerAndArmReroll(channel, state, winnerId, { solo = false } = {}) {
+  clearRerollTimer(state);
+
   state.status = 'awaiting_open';
   state.winnerId = winnerId;
   state.remainingIds = [winnerId];
-  await persistChestState(state);
-  await channel
+  state.openDeadlineAt = Date.now() + CONFIG.UNCLAIMED_CHEST_TIMEOUT_MS;
+
+  const winnerMessage = await channel
     .send({
-      components: [visuals.buildWinnerEmbed(winnerId, { chestType: state.chestType })],
+      components: [visuals.buildWinnerEmbed(winnerId, { solo, chestType: state.chestType })],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: pingOnly([winnerId]),
     })
+    .catch(() => null);
+  if (winnerMessage) state.messageId = winnerMessage.id;
+
+  await persistChestState(state);
+  armRerollTimer(channel, state);
+}
+
+function armRerollTimer(channel, state) {
+  clearRerollTimer(state);
+  const msLeft = Math.max(0, Number(state.openDeadlineAt || Date.now()) - Date.now());
+  state.rerollTimer = setTimeout(() => {
+    rerollWinner(channel, state).catch((err) => console.error('[Xerion] Error re-sorteando ganador:', err));
+  }, msLeft);
+}
+
+function clearRerollTimer(state) {
+  if (state?.rerollTimer) {
+    clearTimeout(state.rerollTimer);
+    state.rerollTimer = null;
+  }
+}
+
+/**
+ * Se dispara si nadie reclamó el cofre en 5 minutos. Re-sortea entre el
+ * resto de participantes originales (nunca entre gente que no jugó) usando
+ * una ruleta con avatares y nombres reales. Si ya no queda nadie más, el
+ * cofre se pierde y el canal queda libre para que aparezca uno nuevo.
+ */
+async function rerollWinner(channel, state) {
+  const current = activeChests.get(channel.id);
+  if (!current || current !== state || state.status !== 'awaiting_open') return; // ya se reclamó o ya no existe
+
+  const failedWinnerId = state.winnerId;
+  state.excludedWinnerIds = [...(state.excludedWinnerIds || []), failedWinnerId];
+  const pool = [...state.participants].filter((id) => !state.excludedWinnerIds.includes(id));
+
+  await channel
+    .send({
+      content: `⌛ <@${failedWinnerId}> no reclamó su ${state.chestType.name} a tiempo — se re-sortea el ganador.`,
+      allowedMentions: SAFE_MENTIONS,
+    })
     .catch(() => {});
+
+  if (pool.length === 0) {
+    await channel
+      .send({
+        components: [visuals.buildOpeningStepEmbed('💨 Nadie reclamó el cofre a tiempo. Se pierde.', state.chestType.color)],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: SAFE_MENTIONS,
+      })
+      .catch(() => {});
+    activeChests.delete(channel.id);
+    await clearPersistedChest(channel.id);
+    return;
+  }
+
+  const newWinnerId = await runPlayerRouletteAnimation(channel, pool, state.chestType);
+  await db.incrementChestsWon(newWinnerId).catch((err) => console.error('[Xerion] Error registrando victoria (re-sorteo):', err));
+  await announceWinnerAndArmReroll(channel, state, newWinnerId, { solo: pool.length === 1 });
+}
+
+/**
+ * Ruleta visual que gira entre avatares/nombres reales para elegir al nuevo
+ * ganador. Sigue la misma filosofía que el motor de recompensas: si el
+ * canvas falla en cualquier punto, se degrada a texto plano sin romper el
+ * flujo ni dejar el cofre trabado.
+ */
+async function runPlayerRouletteAnimation(channel, candidateIds, chestType) {
+  const winnerId = candidateIds[randomInt(candidateIds.length)];
+  let spinSucceeded = false;
+  let seqMessage = null;
+
+  try {
+    const users = (
+      await Promise.all(candidateIds.map((id) => channel.client.users.fetch(id).catch(() => null)))
+    ).filter(Boolean);
+    const winnerUser = users.find((u) => u.id === winnerId) || null;
+
+    if (users.length > 0) {
+      seqMessage = await channel
+        .send({
+          components: [visuals.buildOpeningStepEmbed('🎲 Girando la ruleta de sobrevivientes...', chestType.color)],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: SAFE_MENTIONS,
+        })
+        .catch(() => null);
+
+      if (seqMessage) {
+        const avatarMap = await visuals.preloadPlayerAvatars(users);
+        const spinDelays = [90, 100, 115, 130, 150, 175, 205, 240, 280, 330];
+        for (let i = 0; i < spinDelays.length; i++) {
+          const isLast = i === spinDelays.length - 1;
+          const attachment = visuals.playerSpinFrameAttachment(users, avatarMap, chestType.color, isLast ? winnerUser : null);
+          await seqMessage.edit({
+            components: [visuals.buildPlayerSpinContainer(chestType)],
+            flags: MessageFlags.IsComponentsV2,
+            files: [attachment],
+            attachments: [],
+          });
+          await sleep(spinDelays[i]);
+        }
+        spinSucceeded = true;
+      }
+    }
+  } catch (err) {
+    console.error('[Xerion] La ruleta de jugadores falló a mitad de la animación, se degrada a texto:', err);
+  }
+
+  if (!spinSucceeded) {
+    const fallbackPayload = {
+      components: [visuals.buildOpeningStepEmbed(`🎉 <@${winnerId}> es el nuevo ganador.`, chestType.color)],
+      flags: MessageFlags.IsComponentsV2,
+      files: [],
+      attachments: [],
+    };
+    if (seqMessage) await seqMessage.edit(fallbackPayload).catch(() => {});
+    else await channel.send({ ...fallbackPayload, allowedMentions: pingOnly([winnerId]) }).catch(() => {});
+  }
+
+  return winnerId;
 }
 
 async function grantRewardRole(guild, userId, roleId) {
@@ -461,16 +587,21 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
   let spinSucceeded = false;
   if (seqMessage) {
     try {
-      const spinDelays = [120, 140, 170, 210, 260, 320, 420];
+      const iconMap = await visuals.preloadRewardIcons(chestType.rewardTable).catch((err) => {
+        console.error('[Xerion] No se pudieron precargar los iconos del canvas, se sigue sin ellos:', err);
+        return null;
+      });
+      // Más frames que antes = giro más fluido, sin alargar la espera total.
+      const spinDelays = [70, 80, 90, 105, 120, 140, 165, 195, 230, 275, 330];
       for (let i = 0; i < spinDelays.length; i++) {
         const isLast = i === spinDelays.length - 1;
-        const attachment = visuals.spinFrameAttachment(chestType.rewardTable, chestType.color, isLast ? reward : null);
-    await seqMessage.edit({
-      components: [visuals.buildSpinContainer(chestType)],
-      flags: MessageFlags.IsComponentsV2,
-      files: [attachment],
-      attachments: [],
-    });
+        const attachment = visuals.spinFrameAttachment(chestType.rewardTable, chestType.color, isLast ? reward : null, 'spin.png', iconMap);
+        await seqMessage.edit({
+          components: [visuals.buildSpinContainer(chestType)],
+          flags: MessageFlags.IsComponentsV2,
+          files: [attachment],
+          attachments: [],
+        });
         await sleep(spinDelays[i]);
       }
       spinSucceeded = true;
@@ -526,6 +657,7 @@ function findPendingChestForUser(userId) {
 
 /** Ejecuta la apertura de un cofre ya ganado — usada tanto por el botón Open como por /claim. */
 async function finalizeChestOpen(channel, state) {
+  clearRerollTimer(state);
   state.status = 'opening';
   state.openingClaimed = true;
   await persistChestState(state);
@@ -726,6 +858,13 @@ async function restoreActiveChest(client) {
           await db.clearActiveChest(state.channelId);
         })
         .catch((err) => console.error('[Xerion] Error reanudando apertura:', err));
+    } else if (state.status === 'awaiting_open' && state.winnerId) {
+      if (state.openDeadlineAt && Date.now() >= Number(state.openDeadlineAt)) {
+        // El plazo ya venció mientras el bot estaba caído — re-sortear ahora mismo.
+        rerollWinner(channel, state).catch((err) => console.error('[Xerion] Error re-sorteando tras reinicio:', err));
+      } else if (state.openDeadlineAt) {
+        armRerollTimer(channel, state);
+      }
     }
   }
 }

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.5 — database.js
+ *  XERION v1.8.0 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -16,7 +16,7 @@
 'use strict';
 
 const { Pool } = require('pg');
-const { CONFIG, SHOP_ITEMS } = require('./config.js');
+const { CONFIG, SHOP_ITEMS, featherBonusMultiplier } = require('./config.js');
 
 const pool = new Pool({
   connectionString: CONFIG.DATABASE_URL,
@@ -42,6 +42,7 @@ const XERION_USERS_COLUMNS = [
   ['aura_infinite_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['king_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['goat_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['star_x_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['arise_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['shields', 'INTEGER NOT NULL DEFAULT 0'],
   ['luck_charms', 'INTEGER NOT NULL DEFAULT 0'],
@@ -252,6 +253,7 @@ async function applyRewardToUser(userId, reward) {
       KING: 'king_count',
       GOAT: 'goat_count',
       ARISE: 'arise_count',
+      STAR_X: 'star_x_count',
     }[reward.key];
     if (column) await pool.query(`UPDATE xerion_users SET ${column} = ${column} + 1 WHERE user_id = $1;`, [userId]);
   }
@@ -280,6 +282,17 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
       return false;
     }
 
+    // Beneficios de rol: el rol más raro que tengas sube tus Feathers ganados.
+    // Se calcula antes de guardar el historial para que quede el monto real acreditado.
+    if (reward.kind === 'currency') {
+      const { rows: bonusRows } = await client.query(
+        `SELECT arise_count, king_count, goat_count, aura_infinite_count, star_x_count FROM xerion_users WHERE user_id = $1;`,
+        [userId],
+      );
+      const multiplier = featherBonusMultiplier(bonusRows[0] || {});
+      reward.amount = Math.round((reward.amount || 0) * multiplier); // el llamador reutiliza este objeto para el embed de resultado
+    }
+
     await client.query(
       `INSERT INTO xerion_chest_awards (chest_id, user_id, reward_key, reward_amount)
        VALUES ($1, $2, $3, $4);`,
@@ -305,6 +318,7 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
         KING: 'king_count',
         GOAT: 'goat_count',
         ARISE: 'arise_count',
+        STAR_X: 'star_x_count',
       }[reward.key];
       if (roleColumn) {
         await client.query(`UPDATE xerion_users SET ${roleColumn} = ${roleColumn} + 1 WHERE user_id = $1;`, [userId]);
@@ -597,10 +611,15 @@ async function consumeLuckCharmIfAvailable(userId) {
  */
 async function claimDaily(userId, identity = {}) {
   await ensureUser(userId, identity);
+  const { rows: bonusRows } = await pool.query(
+    `SELECT arise_count, king_count, goat_count, aura_infinite_count, star_x_count FROM xerion_users WHERE user_id = $1;`,
+    [userId],
+  );
+  const dailyReward = Math.round(25 * featherBonusMultiplier(bonusRows[0] || {}));
   const { rows } = await pool.query(
     `UPDATE xerion_users
-     SET feathers = feathers + 25,
-         total_feathers_earned = total_feathers_earned + 25,
+     SET feathers = feathers + $2,
+         total_feathers_earned = total_feathers_earned + $2,
          daily_claims = daily_claims + 1,
          current_streak = CASE
            WHEN last_daily_claim_at IS NOT NULL AND last_daily_claim_at >= NOW() - INTERVAL '48 hours'
@@ -619,9 +638,9 @@ async function claimDaily(userId, identity = {}) {
      WHERE user_id = $1
        AND (last_daily_claim_at IS NULL OR last_daily_claim_at <= NOW() - INTERVAL '24 hours')
      RETURNING feathers, daily_claims, last_daily_claim_at, current_streak, best_streak, streak_visible;`,
-    [userId],
+    [userId, dailyReward],
   );
-  if (rows[0]) return { claimed: true, reward: 25, ...rows[0] };
+  if (rows[0]) return { claimed: true, reward: dailyReward, ...rows[0] };
   const { rows: current } = await pool.query(
     `SELECT feathers, daily_claims, last_daily_claim_at, current_streak, best_streak, streak_visible FROM xerion_users WHERE user_id = $1;`,
     [userId],

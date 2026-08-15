@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.5 — visuals.js
+ *  XERION v1.8.0 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -24,7 +24,7 @@ const {
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
 } = require('discord.js');
-const { createCanvas } = require('@napi-rs/canvas');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 
 const {
   CONFIG,
@@ -38,6 +38,8 @@ const {
   computeSpawnChance,
   messagesUntilNextIncrease,
   maybeTipLine,
+  highestRoleKey,
+  ROLE_FEATHER_BONUS,
 } = require('./config.js');
 
 // ============================================================================
@@ -92,7 +94,7 @@ function pickFillerReward(table) {
   return table[Math.floor(Math.random() * table.length)];
 }
 
-function drawSpinCell(ctx, index, reward, highlighted) {
+function drawSpinCell(ctx, index, reward, highlighted, iconImg) {
   const x = index * SPIN_CELL_W;
   const pad = 6;
   const w = SPIN_CELL_W - pad * 2;
@@ -100,6 +102,17 @@ function drawSpinCell(ctx, index, reward, highlighted) {
   const y = pad;
   const radius = 16;
   const { r, g, b } = hexToRgb(reward.color);
+
+  if (highlighted) {
+    // resplandor detrás de la celda ganadora — más impacto visual sin arriesgar nada (es solo un blur de color).
+    ctx.save();
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.85)`;
+    ctx.shadowBlur = 28;
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.01)`;
+    ctx.fill();
+    ctx.restore();
+  }
 
   const grad = ctx.createLinearGradient(0, y, 0, y + h);
   grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.95)`);
@@ -109,6 +122,18 @@ function drawSpinCell(ctx, index, reward, highlighted) {
   ctx.fill();
 
   if (highlighted) {
+    // brillo diagonal — un solo triángulo semitransparente, barato y sin texto/emoji de por medio.
+    ctx.save();
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.clip();
+    const shine = ctx.createLinearGradient(x + pad, y, x + pad + w * 0.6, y + h);
+    shine.addColorStop(0, 'rgba(255,255,255,0.22)');
+    shine.addColorStop(0.4, 'rgba(255,255,255,0.02)');
+    shine.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = shine;
+    ctx.fillRect(x + pad, y, w, h);
+    ctx.restore();
+
     ctx.lineWidth = 4;
     ctx.strokeStyle = 'rgba(255,255,255,0.92)';
     roundRectPath(ctx, x + pad, y, w, h, radius);
@@ -117,13 +142,26 @@ function drawSpinCell(ctx, index, reward, highlighted) {
     ctx.globalAlpha = 0.55;
   }
 
-  ctx.fillStyle = '#ffffff';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = highlighted ? 'bold 21px sans-serif' : 'bold 16px sans-serif';
   const label =
     reward.kind === 'currency' ? `+${reward.amount ?? rollFeatherAmount(reward)}` : reward.label.toUpperCase();
-  wrapCenteredText(ctx, label, x + pad + w / 2, y + h / 2, w - 18, highlighted ? 24 : 19);
+
+  if (iconImg) {
+    const iconSize = highlighted ? 40 : 28;
+    const iconCx = x + pad + w / 2;
+    const iconY = y + (highlighted ? 22 : 20);
+    ctx.drawImage(iconImg, iconCx - iconSize / 2, iconY, iconSize, iconSize);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = highlighted ? 'bold 19px sans-serif' : 'bold 14px sans-serif';
+    wrapCenteredText(ctx, label, iconCx, iconY + iconSize + (highlighted ? 20 : 16), w - 18, highlighted ? 22 : 17);
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = highlighted ? 'bold 21px sans-serif' : 'bold 16px sans-serif';
+    wrapCenteredText(ctx, label, x + pad + w / 2, y + h / 2, w - 18, highlighted ? 24 : 19);
+  }
   ctx.globalAlpha = 1;
 }
 
@@ -131,8 +169,11 @@ function drawSpinCell(ctx, index, reward, highlighted) {
  * Dibuja un frame de la tira giratoria, coloreado según el tipo de cofre.
  * Si se pasa forcedResult, la celda central queda fijada a esa recompensa
  * (se usa en el último frame, el que "gana"); si no, también es aleatoria.
+ * iconMap es opcional (Map rewardKey -> Image|null de preloadRewardIcons) —
+ * si no se pasa, o si a un reward le falta el icono, se dibuja igual que
+ * antes (solo texto), así que nunca es un punto de fallo.
  */
-function generateSpinFrame(table, tierColor, forcedResult = null) {
+function generateSpinFrame(table, tierColor, forcedResult = null, iconMap = null) {
   const canvas = createCanvas(SPIN_W, SPIN_H);
   const ctx = canvas.getContext('2d');
   const { r, g, b } = hexToRgb(tierColor);
@@ -150,7 +191,7 @@ function generateSpinFrame(table, tierColor, forcedResult = null) {
   for (let i = 0; i < SPIN_CELLS; i++) {
     const isCenter = i === SPIN_CENTER;
     const reward = isCenter && forcedResult ? forcedResult : pickFillerReward(table);
-    drawSpinCell(ctx, i, reward, isCenter);
+    drawSpinCell(ctx, i, reward, isCenter, iconMap ? iconMap.get(reward.key) : null);
   }
 
   // punteros arriba/abajo marcando la celda central
@@ -186,9 +227,220 @@ function generateSpinFrame(table, tierColor, forcedResult = null) {
   return canvas.toBuffer('image/png');
 }
 
-function spinFrameAttachment(table, tierColor, forcedResult = null, name = 'spin.png') {
-  const buffer = generateSpinFrame(table, tierColor, forcedResult);
+function spinFrameAttachment(table, tierColor, forcedResult = null, name = 'spin.png', iconMap = null) {
+  const buffer = generateSpinFrame(table, tierColor, forcedResult, iconMap);
   return new AttachmentBuilder(buffer, { name });
+}
+
+// ============================================================================
+// RULETA DE JUGADORES — misma mecánica visual que la de recompensas, pero
+// gira entre avatares y nombres reales (se usa cuando nadie reclama un
+// cofre a tiempo y hay que re-sortear ganador). Los avatares se cargan como
+// imágenes reales (nunca como texto/emoji dibujado), y si algo falla al
+// cargar uno se dibuja un círculo de respaldo — nunca un glifo roto.
+// ============================================================================
+
+const avatarImageCache = new Map();
+
+// Códigos de Twemoji (el mismo set de emoji que ya usa Discord en toda su UI,
+// así que el resultado se ve consistente con lo que la gente ya conoce — y
+// evita depender de la fuente de emoji instalada en el servidor, que fue
+// justo lo que causaba el bug original). Si alguno fallara al cargar, el
+// icono simplemente no se dibuja — el diseño ya funciona bien sin él.
+const REWARD_ICON_CODEPOINTS = {
+  ARISE: '1f480',
+  KING: '1f451',
+  GOAT: '1f410',
+  AURA_INFINITE: '1f30c',
+  STAR_X: '2b50',
+  FEATHERS: '1f525',
+  NOTHING: '1f4a8',
+};
+
+const emojiImageCache = new Map();
+
+/** Descarga y decodifica un icono de emoji una sola vez; nunca lanza — devuelve null si algo falla. */
+async function loadEmojiImage(codepoint) {
+  if (!codepoint) return null;
+  if (emojiImageCache.has(codepoint)) return emojiImageCache.get(codepoint);
+  try {
+    const url = `https://cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/72x72/${codepoint}.png`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const img = await loadImage(buffer);
+    emojiImageCache.set(codepoint, img);
+    return img;
+  } catch (err) {
+    console.error(`[Xerion] No se pudo cargar el icono de ${codepoint} para el canvas:`, err.message);
+    emojiImageCache.set(codepoint, null); // no reintentar en cada frame de la misma animación
+    return null;
+  }
+}
+
+/** Precarga (y cachea) los iconos que va a necesitar una tabla de recompensas. Devuelve un Map rewardKey -> Image|null. */
+async function preloadRewardIcons(table) {
+  const entries = await Promise.all(
+    table.map(async (r) => [r.key, await loadEmojiImage(REWARD_ICON_CODEPOINTS[r.key])]),
+  );
+  return new Map(entries);
+}
+
+/** Descarga y decodifica un avatar una sola vez; los siguientes usos salen de caché. Nunca lanza — devuelve null si algo falla. */
+async function loadAvatarImage(url) {
+  if (!url) return null;
+  if (avatarImageCache.has(url)) return avatarImageCache.get(url);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const img = await loadImage(buffer);
+    avatarImageCache.set(url, img);
+    return img;
+  } catch (err) {
+    console.error('[Xerion] No se pudo cargar un avatar para la ruleta:', err.message);
+    return null;
+  }
+}
+
+/** Precarga (y cachea) los avatares de una lista de discord.js Users. Devuelve un Map userId -> Image|null. */
+async function preloadPlayerAvatars(users) {
+  const entries = await Promise.all(
+    users.map(async (user) => [user.id, await loadAvatarImage(user.displayAvatarURL({ extension: 'png', size: 128 }))]),
+  );
+  return new Map(entries);
+}
+
+function drawPlayerCell(ctx, index, user, avatarImg, highlighted) {
+  const x = index * SPIN_CELL_W;
+  const pad = 6;
+  const w = SPIN_CELL_W - pad * 2;
+  const h = SPIN_H - pad * 2;
+  const y = pad;
+  const radius = 16;
+
+  const grad = ctx.createLinearGradient(0, y, 0, y + h);
+  if (highlighted) {
+    grad.addColorStop(0, 'rgba(255, 209, 102, 0.95)');
+    grad.addColorStop(1, 'rgba(120, 84, 12, 0.95)');
+  } else {
+    grad.addColorStop(0, 'rgba(80, 80, 92, 0.55)');
+    grad.addColorStop(1, 'rgba(28, 28, 36, 0.55)');
+  }
+  ctx.fillStyle = grad;
+  roundRectPath(ctx, x + pad, y, w, h, radius);
+  ctx.fill();
+
+  if (highlighted) {
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.stroke();
+  } else {
+    ctx.globalAlpha = 0.6;
+  }
+
+  const cx = x + pad + w / 2;
+  const avatarSize = highlighted ? 96 : 74;
+  const avatarY = y + 14;
+
+  if (avatarImg) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(avatarImg, cx - avatarSize / 2, avatarY, avatarSize, avatarSize);
+    ctx.restore();
+    ctx.lineWidth = highlighted ? 3 : 2;
+    ctx.strokeStyle = highlighted ? '#ffffff' : 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.arc(cx, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    // Sin avatar disponible: círculo simple de respaldo, nunca un glifo de texto que pueda salir "bugueado".
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.beginPath();
+    ctx.arc(cx, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = highlighted ? 'bold 17px sans-serif' : 'bold 13px sans-serif';
+  const name = (user?.username || user?.globalName || '???').slice(0, 14);
+  wrapCenteredText(ctx, name, cx, avatarY + avatarSize + 19, w - 12, highlighted ? 19 : 15);
+  ctx.globalAlpha = 1;
+}
+
+/**
+ * Dibuja un frame de la ruleta de jugadores. Si se pasa forcedWinner, la
+ * celda central queda fijada a ese usuario (último frame, el que "gana").
+ */
+function generatePlayerSpinFrame(users, avatarMap, tierColor, forcedWinner = null) {
+  const canvas = createCanvas(SPIN_W, SPIN_H);
+  const ctx = canvas.getContext('2d');
+  const { r, g, b } = hexToRgb(tierColor);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, SPIN_H);
+  bg.addColorStop(0, `rgba(${Math.floor(r * 0.28)}, ${Math.floor(g * 0.22)}, ${Math.floor(b * 0.2)}, 1)`);
+  bg.addColorStop(1, '#120b08');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, SPIN_W, SPIN_H);
+
+  ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
+  ctx.fillRect(0, 0, SPIN_W, 4);
+
+  for (let i = 0; i < SPIN_CELLS; i++) {
+    const isCenter = i === SPIN_CENTER;
+    const user = isCenter && forcedWinner ? forcedWinner : users[Math.floor(Math.random() * users.length)];
+    drawPlayerCell(ctx, i, user, avatarMap.get(user?.id) || null, isCenter);
+  }
+
+  const cx = SPIN_CENTER * SPIN_CELL_W + SPIN_CELL_W / 2;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath();
+  ctx.moveTo(cx - 11, 9);
+  ctx.lineTo(cx + 11, 9);
+  ctx.lineTo(cx, 23);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - 11, SPIN_H - 5);
+  ctx.lineTo(cx + 11, SPIN_H - 5);
+  ctx.lineTo(cx, SPIN_H - 19);
+  ctx.closePath();
+  ctx.fill();
+
+  const fadeW = 110;
+  const left = ctx.createLinearGradient(0, 0, fadeW, 0);
+  left.addColorStop(0, 'rgba(9,6,4,0.96)');
+  left.addColorStop(1, 'rgba(9,6,4,0)');
+  ctx.fillStyle = left;
+  ctx.fillRect(0, 0, fadeW, SPIN_H);
+
+  const right = ctx.createLinearGradient(SPIN_W - fadeW, 0, SPIN_W, 0);
+  right.addColorStop(0, 'rgba(9,6,4,0)');
+  right.addColorStop(1, 'rgba(9,6,4,0.96)');
+  ctx.fillStyle = right;
+  ctx.fillRect(SPIN_W - fadeW, 0, fadeW, SPIN_H);
+
+  return canvas.toBuffer('image/png');
+}
+
+function playerSpinFrameAttachment(users, avatarMap, tierColor, forcedWinner = null, name = 'player-spin.png') {
+  const buffer = generatePlayerSpinFrame(users, avatarMap, tierColor, forcedWinner);
+  return new AttachmentBuilder(buffer, { name });
+}
+
+function buildPlayerSpinContainer(chestType, attachmentName = 'player-spin.png') {
+  return new ContainerBuilder()
+    .setAccentColor(chestType.color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 🎲 Re-sorteando ganador de ${chestType.name}`))
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
+    );
 }
 
 // ============================================================================
@@ -326,6 +578,7 @@ const RESULT_FLAVOR = {
   KING: 'El cofre te corona. No todos pueden decir lo mismo.',
   GOAT: 'El tercer trono también es tuyo. Muy pocos llegan a esta altura.',
   AURA_INFINITE: 'Pocos llegan tan lejos. Hoy la suerte estuvo de tu lado.',
+  STAR_X: 'Tu primera estrella. El comienzo de algo más grande.',
   FEATHERS: 'No es el premio mayor, pero suma para la próxima — o para la tienda.',
   NOTHING: 'El cofre estaba vacío para ti esta vez. Así de cruel es Xerion.',
 };
@@ -359,6 +612,16 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)
 // Los mentions AQUÍ SÍ pingarían si no se suprimen — game.js siempre envía
 // estos paneles con allowedMentions: SAFE_MENTIONS.
 // ============================================================================
+
+const ROLE_LABELS = { ARISE: 'ARISE 💀', KING: 'KING 👑', GOAT: 'GOAT 🐐', AURA_INFINITE: 'AURA INFINITE 🌌', STAR_X: 'STAR X ⭐' };
+
+/** Línea que muestra el beneficio activo de rol (según el más raro que tenga el usuario). */
+function roleBenefitLine(stats) {
+  const key = highestRoleKey(stats);
+  if (!key) return '🎁 **Beneficio de rol:** Ninguno todavía — gana un rol para desbloquear un bonus permanente de Feathers.';
+  const pct = Math.round(ROLE_FEATHER_BONUS[key] * 100);
+  return `🎁 **Beneficio de rol activo:** ${ROLE_LABELS[key]} — **+${pct}%** Feathers en cada premio`;
+}
 
 /** Añade, solo a veces (ver TIP_SHOW_CHANCE), una línea de tip al final de un container. Muta y devuelve el mismo container. */
 function addTipFooter(container) {
@@ -408,12 +671,17 @@ function buildProfileContainer(stats, discordUser) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
+          `⭐ **STAR X:** ${formatNumber(stats.star_x_count)}`,
           `🌌 **AURA INFINITE:** ${formatNumber(stats.aura_infinite_count)}`,
           `🐐 **GOAT:** ${formatNumber(stats.goat_count)}`,
           `👑 **KING:** ${formatNumber(stats.king_count)}`,
           `💀 **ARISE:** ${formatNumber(stats.arise_count)}`,
         ].join('\n'),
       ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(roleBenefitLine(stats)),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
@@ -439,7 +707,7 @@ function buildQuickInventoryContainer(stats, discordUser) {
         [
           `**${discordUser.username}'s Inventory**`,
           `${FEATHER_EMOJI} **${formatNumber(stats.feathers)}** Feathers`,
-          `🌌 ${stats.aura_infinite_count}  ·  🐐 ${stats.goat_count}  ·  👑 ${stats.king_count}  ·  💀 ${stats.arise_count}`,
+          `⭐ ${stats.star_x_count}  ·  🌌 ${stats.aura_infinite_count}  ·  🐐 ${stats.goat_count}  ·  👑 ${stats.king_count}  ·  💀 ${stats.arise_count}`,
           `${SHOP_ITEMS.SHIELD.emoji} ${stats.shields} Escudo(s)  ·  ${SHOP_ITEMS.CHARM.emoji} ${stats.luck_charms} Amuleto(s)  ·  ${SHOP_ITEMS.REVIVE.emoji} ${stats.revives} Pluma(s) Fénix`,
         ].join('\n'),
       ),
@@ -722,6 +990,7 @@ function buildAchievementsContainer(stats) {
     [stats.chests_won >= 1, 'Último superviviente', 'Gana tu primer cofre.'],
     [stats.chests_won >= 10, 'Imparable', 'Gana 10 cofres.'],
     [stats.total_feathers_earned >= 100, 'Plumaje de acero', 'Consigue 100 Feathers en total.'],
+    [stats.star_x_count >= 1, 'Primera estrella', 'Obtén STAR X.'],
     [stats.aura_infinite_count >= 1, 'Aura despertada', 'Obtén AURA INFINITE.'],
     [stats.king_count >= 1, 'Corona de Xerion', 'Obtén KING.'],
     [stats.goat_count >= 1, 'Cabra suprema', 'Obtén GOAT.'],
@@ -838,6 +1107,11 @@ function buildRulesContainer() {
 module.exports = {
   generateSpinFrame,
   spinFrameAttachment,
+  preloadRewardIcons,
+  preloadPlayerAvatars,
+  generatePlayerSpinFrame,
+  playerSpinFrameAttachment,
+  buildPlayerSpinContainer,
   buildRewardsFieldValue,
   buildChestEmbed,
   buildParticipateRow,

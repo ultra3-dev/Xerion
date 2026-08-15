@@ -1,4 +1,4 @@
-# Xerion v1.7.5
+# Xerion v1.8.0
 
 Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Hecho con **discord.js v14 (Components V2)**, **Express** y **PostgreSQL (Neon)**.
 
@@ -20,7 +20,7 @@ Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualq
 5. En **OAuth2 > URL Generator**, marca los scopes `bot` y `applications.commands`, y en permisos marca al menos:
    - View Channels, Send Messages, Embed Links, Read Message History, Use External Emojis, **Manage Roles**
 6. Abre la URL generada e invita el bot a tu servidor.
-7. **Importante:** en la lista de roles de tu servidor, el rol del bot debe quedar **por encima** de los cuatro roles de recompensa (AURA INFINITE, KING, GOAT, ARISE), o no podrá asignarlos — Discord no deja que un bot otorgue un rol más alto que el suyo.
+7. **Importante:** en la lista de roles de tu servidor, el rol del bot debe quedar **por encima** de los cinco roles de recompensa (AURA INFINITE, KING, GOAT, ARISE, STAR X), o no podrá asignarlos — Discord no deja que un bot otorgue un rol más alto que el suyo. El rol de **Black List** no necesita ninguna posición especial: el bot solo lo lee, nunca lo asigna ni lo quita.
 
 ## 2. Base de datos (Neon)
 

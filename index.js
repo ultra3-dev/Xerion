@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.5 — index.js
+ *  XERION v1.8.0 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página

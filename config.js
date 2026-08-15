@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.7.5 — config.js
+ *  XERION v1.8.0 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.7.5',
+  VERSION: '1.8.0',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -32,6 +32,8 @@ const CONFIG = {
     KING: '1531508465174970518',
     GOAT: '1537232162246496346',
     ARISE: '1531512361104572507',
+    STAR_X: '1489704408538415184',
+    BLACKLIST: '1501082061166084237',
   },
 
   // ----------------------------------------------------------------------
@@ -55,6 +57,11 @@ const CONFIG = {
   BATCH_THRESHOLD: 10,
   BATCH_FRACTION: 0.25,
 
+  // Si el ganador no reclama su cofre en este plazo, se re-sortea entre el
+  // resto de participantes (con una ruleta de jugadores) para que el canal
+  // nunca se quede trabado esperando a alguien que no vuelve.
+  UNCLAIMED_CHEST_TIMEOUT_MS: 5 * 60 * 1000,
+
   COLORS: {
     BRAND: 0xe8442c,
     FEATHERS: 0xff9f43,
@@ -62,6 +69,7 @@ const CONFIG = {
     KING: 0xe8b613,
     GOAT: 0xcd7f32,
     ARISE: 0x9d0208,
+    STAR_X: 0x5bc0de,
     NOTHING: 0x57534e,
     DARK: 0x1a1410,
     CENIZA: 0x9a958c,
@@ -111,6 +119,10 @@ function buildRewardTable(t) {
       kind: 'role', roleId: CONFIG.ROLE_IDS.AURA_INFINITE, mention: `<@&${CONFIG.ROLE_IDS.AURA_INFINITE}>`,
     },
     {
+      key: 'STAR_X', label: 'STAR X', emoji: '⭐', chance: t.starX, color: CONFIG.COLORS.STAR_X,
+      kind: 'role', roleId: CONFIG.ROLE_IDS.STAR_X, mention: `<@&${CONFIG.ROLE_IDS.STAR_X}>`,
+    },
+    {
       key: 'FEATHERS', label: 'Feathers', emoji: FEATHER_EMOJI, chance: t.feathers, color: CONFIG.COLORS.FEATHERS,
       kind: 'currency', amountMin: t.featherMin, amountMax: t.featherMax,
     },
@@ -129,7 +141,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.CENIZA,
     weight: 70,
     flavor: 'Lo más habitual. La mayoría de las veces no guarda nada — pero "la mayoría" no es "siempre".',
-    rewardTable: buildRewardTable({ arise: 0.15, king: 0.35, goat: 0.48, aura: 0.6, feathers: 6, featherMin: 8, featherMax: 15, nothing: 92.42 }),
+    rewardTable: buildRewardTable({ arise: 0.15, king: 0.35, goat: 0.48, aura: 0.6, starX: 1.2, feathers: 6, featherMin: 8, featherMax: 15, nothing: 91.22 }),
   },
   BRASA: {
     key: 'BRASA',
@@ -139,7 +151,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.BRASA,
     weight: 25,
     flavor: 'Arde distinto. Las probabilidades de premio se cuadruplican frente a un cofre común.',
-    rewardTable: buildRewardTable({ arise: 0.4, king: 0.9, goat: 1.2, aura: 1.6, feathers: 12, featherMin: 15, featherMax: 30, nothing: 83.9 }),
+    rewardTable: buildRewardTable({ arise: 0.4, king: 0.9, goat: 1.2, aura: 1.6, starX: 3.2, feathers: 12, featherMin: 15, featherMax: 30, nothing: 80.7 }),
   },
   ABISMO: {
     key: 'ABISMO',
@@ -149,7 +161,7 @@ const CHEST_TYPES = {
     color: CONFIG.COLORS.ABISMO,
     weight: 5,
     flavor: 'Casi nunca aparece. Sigue sin ser fácil — pero es lo más cerca que vas a estar de un rol legendario.',
-    rewardTable: buildRewardTable({ arise: 1.2, king: 2.5, goat: 3.3, aura: 4.3, feathers: 25, featherMin: 30, featherMax: 60, nothing: 63.7 }),
+    rewardTable: buildRewardTable({ arise: 1.2, king: 2.5, goat: 3.3, aura: 4.3, starX: 8.6, feathers: 25, featherMin: 30, featherMax: 60, nothing: 55.1 }),
   },
 };
 
@@ -299,8 +311,39 @@ function isOnCooldown(key, ms) {
   return false;
 }
 
-// Por defecto, ningún mensaje del bot pinga a nadie. Solo se activa
-// explícitamente para la eliminación y el ganador del cofre (ver game.js).
+// ============================================================================
+// BENEFICIOS DE ROL — entre más raro el rol que tienes, mejor el beneficio.
+// Se aplica como un bonus permanente al ganar Feathers (cofre o daily),
+// usando SOLO el rol más raro que tengas (no se acumulan varios a la vez).
+// ============================================================================
+
+const ROLE_FEATHER_BONUS = {
+  ARISE: 0.25,
+  KING: 0.18,
+  GOAT: 0.12,
+  AURA_INFINITE: 0.06,
+  STAR_X: 0.02,
+};
+
+/** Recibe el objeto de conteos de rol de un usuario (aura_infinite_count, etc.) y devuelve su multiplicador de Feathers. */
+function featherBonusMultiplier(counts = {}) {
+  if (counts.arise_count > 0) return 1 + ROLE_FEATHER_BONUS.ARISE;
+  if (counts.king_count > 0) return 1 + ROLE_FEATHER_BONUS.KING;
+  if (counts.goat_count > 0) return 1 + ROLE_FEATHER_BONUS.GOAT;
+  if (counts.aura_infinite_count > 0) return 1 + ROLE_FEATHER_BONUS.AURA_INFINITE;
+  if (counts.star_x_count > 0) return 1 + ROLE_FEATHER_BONUS.STAR_X;
+  return 1;
+}
+
+/** Nombre del rol más raro que tiene el usuario (o null si no tiene ninguno), para mostrar en paneles. */
+function highestRoleKey(counts = {}) {
+  if (counts.arise_count > 0) return 'ARISE';
+  if (counts.king_count > 0) return 'KING';
+  if (counts.goat_count > 0) return 'GOAT';
+  if (counts.aura_infinite_count > 0) return 'AURA_INFINITE';
+  if (counts.star_x_count > 0) return 'STAR_X';
+  return null;
+}
 const SAFE_MENTIONS = { parse: [] };
 function pingOnly(userIds) {
   return { parse: [], users: [...new Set(userIds)] };
@@ -322,6 +365,7 @@ const TIPS = [
   'El Cofre del Abismo es rarísimo, pero cuadruplica tus probabilidades de rol frente al Cofre de Ceniza.',
   'No te saltes tu `/daily`: dejar pasar más de un día reinicia tu racha desde cero.',
   'Un Amuleto de Suerte sube un 50% tus probabilidades de conseguir un rol en tu próxima apertura.',
+  'Entre más raro el rol que tengas, más Feathers ganas — ARISE da hasta un 25% extra en cada premio.',
 ];
 
 const TIP_SHOW_CHANCE = 0.2; // ~1 de cada 5 veces, para que se sienta ocasional y no repetitivo
@@ -363,4 +407,7 @@ module.exports = {
   TIPS,
   pickRandomTip,
   maybeTipLine,
+  ROLE_FEATHER_BONUS,
+  featherBonusMultiplier,
+  highestRoleKey,
 };

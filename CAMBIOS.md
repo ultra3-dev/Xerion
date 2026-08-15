@@ -1,3 +1,37 @@
+# Xerion v1.8.0 — Qué cambió
+
+## Rol nuevo: STAR X (el más básico)
+
+- Se agregó <@&1489704408538415184> **STAR X** ⭐ como el rol más común de todos, justo después de AURA INFINITE. Orden de rareza completo: ARISE > KING > GOAT > AURA INFINITE > STAR X.
+- Probabilidad propia por tier (Ceniza 1.2% · Brasa 3.2% · Abismo 8.6%), con las 3 tablas rebalanceadas para seguir sumando exactamente 100%.
+
+## Beneficios por rareza de rol
+
+- Cada rol de cofre ahora da un bonus permanente de Feathers, según qué tan raro sea: **ARISE +25%**, **KING +18%**, **GOAT +12%**, **AURA INFINITE +6%**, **STAR X +2%**.
+- Solo cuenta el rol más raro que tengas (no se suman varios a la vez). Se aplica tanto en premios de cofre como en `/daily`, y se muestra en `/profile`.
+
+## Black List
+
+- <@&1501082061166084237> ahora bloquea la participación: quien tenga ese rol recibe un aviso privado al intentar unirse a un cofre y no entra al sorteo.
+
+## Cofres que ya no se quedan trabados
+
+- Si el ganador no reclama su cofre en **5 minutos**, el bot re-sortea automáticamente entre el resto de quienes participaron — con una ruleta nueva que gira con **avatares y nombres reales**, no con iconos genéricos.
+- Si nadie más queda disponible, el cofre se pierde y el canal queda libre al instante para que aparezca uno nuevo — antes se quedaba bloqueado indefinidamente esperando a alguien que nunca volvía.
+- El re-sorteo sobrevive a un reinicio del bot: si el plazo ya venció mientras estaba caído, se resuelve apenas vuelve a conectar.
+
+## Iconos reales en el Canvas de apertura
+
+- Cada recompensa (ARISE, KING, GOAT, AURA INFINITE, STAR X, Feathers, Nothing) ahora muestra su propio icono a color en la ruleta del cofre, además del texto.
+- Los iconos se cargan como imágenes (el mismo estilo de emoji que ya usa Discord en toda su app), nunca como texto dibujado a mano — así se evita por completo el bug de glifos rotos que podía salir según la fuente instalada en el servidor. Si un icono no llega a cargar por cualquier motivo, esa celda simplemente se ve como antes (solo texto) — nunca rompe la animación.
+
+## Canvas con más impacto y más fluido
+
+- La celda ganadora ahora tiene resplandor de color y un brillo diagonal para que se sienta más "premio".
+- La animación de apertura pasó de 7 a 11 frames (giro más fluido, sin alargar la espera) y usa la misma mejora la nueva ruleta de re-sorteo de jugadores.
+
+---
+
 # Xerion v1.7.5 — Qué cambió
 
 ## Rol nuevo: GOAT
