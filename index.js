@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.0 — index.js
+ *  XERION v1.8.1 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -223,13 +223,14 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/help</code></td><td>List every command</td></tr>
         <tr><td><code>/chest</code></td><td>Live status, channel counters and current chance</td></tr>
         <tr><td><code>/daily</code></td><td>Claim 25 Feathers every 24 hours and build your streak</td></tr>
-        <tr><td><code>/claim</code></td><td>Claim a chest you already won but haven't opened yet</td></tr>
+        <tr><td><code>/claim</code></td><td>Collect passive Feathers earned by the roles you own</td></tr>
         <tr><td><code>/history</code></td><td>Review your latest rewards</td></tr>
         <tr><td><code>/achievements</code></td><td>Track permanent Xerion milestones</td></tr>
         <tr><td><code>/rank</code> · <code>/rewards</code></td><td>See progress and reward summaries</td></tr>
         <tr><td><code>/streak</code></td><td>Your daily streak, and whether it shows on your nickname</td></tr>
         <tr><td><code>/ping</code> · <code>/about</code> · <code>/rules</code></td><td>Diagnostics, version and game rules</td></tr>
-        <tr><td><code>${CONFIG.PREFIX} spawn</code></td><td>Owner-only — force a chest to appear</td></tr>
+        <tr><td><code>@Xerion</code></td><td>Mention the bot (or reply to one of its AI messages) to chat — powered by Groq, never pings anyone</td></tr>
+        <tr><td><code>${CONFIG.PREFIX} spawn</code></td><td>Owner-only — force a chest to appear, even with one already active (max 5, one every 30s)</td></tr>
       </table>
     </div>
   </section>

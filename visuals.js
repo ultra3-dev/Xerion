@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.0 — visuals.js
+ *  XERION v1.8.1 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -40,6 +40,10 @@ const {
   maybeTipLine,
   highestRoleKey,
   ROLE_FEATHER_BONUS,
+  ROLE_PASSIVE_INCOME,
+  ACHIEVEMENTS,
+  countCompletedAchievements,
+  achievementBonusMultiplier,
 } = require('./config.js');
 
 // ============================================================================
@@ -100,26 +104,89 @@ function drawSpinCell(ctx, index, reward, highlighted, iconImg) {
   const w = SPIN_CELL_W - pad * 2;
   const h = SPIN_H - pad * 2;
   const y = pad;
-  const radius = 16;
+  const radius = 18;
+  const isNothing = reward.kind === 'none';
   const { r, g, b } = hexToRgb(reward.color);
 
   if (highlighted) {
-    // resplandor detrás de la celda ganadora — más impacto visual sin arriesgar nada (es solo un blur de color).
+    // Rayos radiantes detrás de la celda ganadora — líneas finas desde el centro, cortadas fuera de la celda.
     ctx.save();
-    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.85)`;
-    ctx.shadowBlur = 28;
+    const burstCx = x + pad + w / 2;
+    const burstCy = y + h / 2;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
+    for (let a = 0; a < 16; a++) {
+      const angle = (a / 16) * Math.PI * 2;
+      ctx.lineWidth = a % 2 === 0 ? 3 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(burstCx + Math.cos(angle) * (h * 0.32), burstCy + Math.sin(angle) * (h * 0.32));
+      ctx.lineTo(burstCx + Math.cos(angle) * (h * 0.62), burstCy + Math.sin(angle) * (h * 0.62));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // resplandor de color detrás de la celda — más grande que antes para más impacto.
+    ctx.save();
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.95)`;
+    ctx.shadowBlur = 42;
     roundRectPath(ctx, x + pad, y, w, h, radius);
-    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.01)`;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.02)`;
     ctx.fill();
     ctx.restore();
   }
 
-  const grad = ctx.createLinearGradient(0, y, 0, y + h);
-  grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.95)`);
-  grad.addColorStop(1, `rgba(${Math.floor(r * 0.5)}, ${Math.floor(g * 0.5)}, ${Math.floor(b * 0.5)}, 0.95)`);
-  ctx.fillStyle = grad;
+  // Cuerpo de la celda. NOTHING usa un tratamiento de "vacío" propio (radial
+  // oscuro con textura sutil) en vez de simplemente verse apagada.
+  if (isNothing) {
+    const void_ = ctx.createRadialGradient(x + pad + w / 2, y + h * 0.35, 4, x + pad + w / 2, y + h / 2, h * 0.75);
+    void_.addColorStop(0, 'rgba(74, 74, 84, 0.95)');
+    void_.addColorStop(1, 'rgba(18, 18, 24, 0.97)');
+    ctx.fillStyle = void_;
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.fill();
+
+    // rayas diagonales muy sutiles, tipo "peligro/vacío" — puramente decorativas.
+    ctx.save();
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 10;
+    for (let sx = -h; sx < w + h; sx += 22) {
+      ctx.beginPath();
+      ctx.moveTo(x + pad + sx, y + h);
+      ctx.lineTo(x + pad + sx + h, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else {
+    const grad = ctx.createLinearGradient(0, y, 0, y + h);
+    grad.addColorStop(0, `rgba(${Math.min(255, r + 25)}, ${Math.min(255, g + 25)}, ${Math.min(255, b + 25)}, 0.97)`);
+    grad.addColorStop(0.55, `rgba(${r}, ${g}, ${b}, 0.97)`);
+    grad.addColorStop(1, `rgba(${Math.floor(r * 0.42)}, ${Math.floor(g * 0.42)}, ${Math.floor(b * 0.42)}, 0.97)`);
+    ctx.fillStyle = grad;
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.fill();
+  }
+
+  // Bisel metálico: un highlight claro arriba-izquierda y una sombra oscura
+  // abajo-derecha, para que cada celda se sienta tallada, no plana.
+  ctx.save();
   roundRectPath(ctx, x + pad, y, w, h, radius);
-  ctx.fill();
+  ctx.clip();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.beginPath();
+  ctx.moveTo(x + pad + 3, y + h - 3);
+  ctx.lineTo(x + pad + 3, y + 3);
+  ctx.lineTo(x + pad + w - 3, y + 3);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(x + pad + 3, y + h - 3);
+  ctx.lineTo(x + pad + w - 3, y + h - 3);
+  ctx.lineTo(x + pad + w - 3, y + 3);
+  ctx.stroke();
+  ctx.restore();
 
   if (highlighted) {
     // brillo diagonal — un solo triángulo semitransparente, barato y sin texto/emoji de por medio.
@@ -127,41 +194,61 @@ function drawSpinCell(ctx, index, reward, highlighted, iconImg) {
     roundRectPath(ctx, x + pad, y, w, h, radius);
     ctx.clip();
     const shine = ctx.createLinearGradient(x + pad, y, x + pad + w * 0.6, y + h);
-    shine.addColorStop(0, 'rgba(255,255,255,0.22)');
-    shine.addColorStop(0.4, 'rgba(255,255,255,0.02)');
+    shine.addColorStop(0, 'rgba(255,255,255,0.28)');
+    shine.addColorStop(0.4, 'rgba(255,255,255,0.03)');
     shine.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = shine;
     ctx.fillRect(x + pad, y, w, h);
     ctx.restore();
 
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     roundRectPath(ctx, x + pad, y, w, h, radius);
     ctx.stroke();
+
+    // esquinas acentuadas — un detalle de "carta premium" en las 4 puntas.
+    const cornerLen = 14;
+    ctx.strokeStyle = `rgba(${Math.min(255, r + 60)}, ${Math.min(255, g + 60)}, ${Math.min(255, b + 60)}, 1)`;
+    ctx.lineWidth = 3;
+    for (const [cx0, cy0, dx, dy] of [
+      [x + pad, y, 1, 1],
+      [x + pad + w, y, -1, 1],
+      [x + pad, y + h, 1, -1],
+      [x + pad + w, y + h, -1, -1],
+    ]) {
+      ctx.beginPath();
+      ctx.moveTo(cx0 + dx * (radius + cornerLen), cy0);
+      ctx.lineTo(cx0 + dx * radius, cy0);
+      ctx.quadraticCurveTo(cx0, cy0, cx0, cy0 + dy * radius);
+      ctx.lineTo(cx0, cy0 + dy * (radius + cornerLen));
+      ctx.stroke();
+    }
   } else {
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.5;
   }
 
   const label =
     reward.kind === 'currency' ? `+${reward.amount ?? rollFeatherAmount(reward)}` : reward.label.toUpperCase();
 
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = highlighted ? 6 : 3;
+
   if (iconImg) {
-    const iconSize = highlighted ? 40 : 28;
+    const iconSize = highlighted ? 44 : 28;
     const iconCx = x + pad + w / 2;
-    const iconY = y + (highlighted ? 22 : 20);
+    const iconY = y + (highlighted ? 20 : 20);
     ctx.drawImage(iconImg, iconCx - iconSize / 2, iconY, iconSize, iconSize);
     ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = highlighted ? 'bold 19px sans-serif' : 'bold 14px sans-serif';
-    wrapCenteredText(ctx, label, iconCx, iconY + iconSize + (highlighted ? 20 : 16), w - 18, highlighted ? 22 : 17);
+    ctx.font = highlighted ? 'bold 20px sans-serif' : 'bold 14px sans-serif';
+    wrapCenteredText(ctx, label, iconCx, iconY + iconSize + (highlighted ? 21 : 16), w - 18, highlighted ? 23 : 17);
   } else {
     ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = highlighted ? 'bold 21px sans-serif' : 'bold 16px sans-serif';
-    wrapCenteredText(ctx, label, x + pad + w / 2, y + h / 2, w - 18, highlighted ? 24 : 19);
+    ctx.font = highlighted ? 'bold 22px sans-serif' : 'bold 16px sans-serif';
+    wrapCenteredText(ctx, label, x + pad + w / 2, y + h / 2, w - 18, highlighted ? 25 : 19);
   }
+  ctx.shadowBlur = 0;
   ctx.globalAlpha = 1;
 }
 
@@ -177,16 +264,31 @@ function generateSpinFrame(table, tierColor, forcedResult = null, iconMap = null
   const canvas = createCanvas(SPIN_W, SPIN_H);
   const ctx = canvas.getContext('2d');
   const { r, g, b } = hexToRgb(tierColor);
+  const centerCx = SPIN_CENTER * SPIN_CELL_W + SPIN_CELL_W / 2;
 
+  // Fondo base
   const bg = ctx.createLinearGradient(0, 0, 0, SPIN_H);
-  bg.addColorStop(0, `rgba(${Math.floor(r * 0.28)}, ${Math.floor(g * 0.22)}, ${Math.floor(b * 0.2)}, 1)`);
-  bg.addColorStop(1, '#120b08');
+  bg.addColorStop(0, `rgba(${Math.floor(r * 0.3)}, ${Math.floor(g * 0.24)}, ${Math.floor(b * 0.22)}, 1)`);
+  bg.addColorStop(1, '#0d0806');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, SPIN_W, SPIN_H);
 
-  // barra de acento superior con el color del tipo de cofre
-  ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
-  ctx.fillRect(0, 0, SPIN_W, 4);
+  // Foco de luz radial detrás de la celda central — le da profundidad al fondo.
+  const spotlight = ctx.createRadialGradient(centerCx, SPIN_H / 2, 10, centerCx, SPIN_H / 2, SPIN_H * 0.9);
+  spotlight.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.35)`);
+  spotlight.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = spotlight;
+  ctx.fillRect(0, 0, SPIN_W, SPIN_H);
+
+  // barra de acento superior e inferior, con un punto más brillante al centro
+  for (const barY of [0, SPIN_H - 4]) {
+    const bar = ctx.createLinearGradient(0, 0, SPIN_W, 0);
+    bar.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.25)`);
+    bar.addColorStop(0.5, `rgba(${Math.min(255, r + 70)}, ${Math.min(255, g + 70)}, ${Math.min(255, b + 70)}, 1)`);
+    bar.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.25)`);
+    ctx.fillStyle = bar;
+    ctx.fillRect(0, barY, SPIN_W, 4);
+  }
 
   for (let i = 0; i < SPIN_CELLS; i++) {
     const isCenter = i === SPIN_CENTER;
@@ -194,33 +296,36 @@ function generateSpinFrame(table, tierColor, forcedResult = null, iconMap = null
     drawSpinCell(ctx, i, reward, isCenter, iconMap ? iconMap.get(reward.key) : null);
   }
 
-  // punteros arriba/abajo marcando la celda central
-  const cx = SPIN_CENTER * SPIN_CELL_W + SPIN_CELL_W / 2;
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  // punteros arriba/abajo marcando la celda central, con un pequeño resplandor propio
+  ctx.save();
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.beginPath();
-  ctx.moveTo(cx - 11, 9);
-  ctx.lineTo(cx + 11, 9);
-  ctx.lineTo(cx, 23);
+  ctx.moveTo(centerCx - 12, 9);
+  ctx.lineTo(centerCx + 12, 9);
+  ctx.lineTo(centerCx, 25);
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.moveTo(cx - 11, SPIN_H - 5);
-  ctx.lineTo(cx + 11, SPIN_H - 5);
-  ctx.lineTo(cx, SPIN_H - 19);
+  ctx.moveTo(centerCx - 12, SPIN_H - 5);
+  ctx.lineTo(centerCx + 12, SPIN_H - 5);
+  ctx.lineTo(centerCx, SPIN_H - 21);
   ctx.closePath();
   ctx.fill();
+  ctx.restore();
 
-  // difuminado lateral estilo tragamonedas
+  // difuminado lateral estilo tragamonedas + viñeta suave arriba/abajo
   const fadeW = 110;
   const left = ctx.createLinearGradient(0, 0, fadeW, 0);
-  left.addColorStop(0, 'rgba(9,6,4,0.96)');
-  left.addColorStop(1, 'rgba(9,6,4,0)');
+  left.addColorStop(0, 'rgba(8,5,4,0.97)');
+  left.addColorStop(1, 'rgba(8,5,4,0)');
   ctx.fillStyle = left;
   ctx.fillRect(0, 0, fadeW, SPIN_H);
 
   const right = ctx.createLinearGradient(SPIN_W - fadeW, 0, SPIN_W, 0);
-  right.addColorStop(0, 'rgba(9,6,4,0)');
-  right.addColorStop(1, 'rgba(9,6,4,0.96)');
+  right.addColorStop(0, 'rgba(8,5,4,0)');
+  right.addColorStop(1, 'rgba(8,5,4,0.97)');
   ctx.fillStyle = right;
   ctx.fillRect(SPIN_W - fadeW, 0, fadeW, SPIN_H);
 
@@ -317,23 +422,70 @@ function drawPlayerCell(ctx, index, user, avatarImg, highlighted) {
   const w = SPIN_CELL_W - pad * 2;
   const h = SPIN_H - pad * 2;
   const y = pad;
-  const radius = 16;
+  const radius = 18;
+  const goldR = 255, goldG = 200, goldB = 90;
+
+  if (highlighted) {
+    // mismo tratamiento "premium" que la ruleta de recompensas: rayos + resplandor dorado.
+    ctx.save();
+    const burstCx = x + pad + w / 2;
+    const burstCy = y + h / 2;
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = `rgba(${goldR}, ${goldG}, ${goldB}, 0.9)`;
+    for (let a = 0; a < 16; a++) {
+      const angle = (a / 16) * Math.PI * 2;
+      ctx.lineWidth = a % 2 === 0 ? 3 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(burstCx + Math.cos(angle) * (h * 0.32), burstCy + Math.sin(angle) * (h * 0.32));
+      ctx.lineTo(burstCx + Math.cos(angle) * (h * 0.62), burstCy + Math.sin(angle) * (h * 0.62));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.shadowColor = `rgba(${goldR}, ${goldG}, ${goldB}, 0.9)`;
+    ctx.shadowBlur = 40;
+    roundRectPath(ctx, x + pad, y, w, h, radius);
+    ctx.fillStyle = `rgba(${goldR}, ${goldG}, ${goldB}, 0.02)`;
+    ctx.fill();
+    ctx.restore();
+  }
 
   const grad = ctx.createLinearGradient(0, y, 0, y + h);
   if (highlighted) {
-    grad.addColorStop(0, 'rgba(255, 209, 102, 0.95)');
-    grad.addColorStop(1, 'rgba(120, 84, 12, 0.95)');
+    grad.addColorStop(0, 'rgba(255, 219, 132, 0.97)');
+    grad.addColorStop(0.55, 'rgba(255, 190, 60, 0.97)');
+    grad.addColorStop(1, 'rgba(120, 84, 12, 0.97)');
   } else {
-    grad.addColorStop(0, 'rgba(80, 80, 92, 0.55)');
-    grad.addColorStop(1, 'rgba(28, 28, 36, 0.55)');
+    grad.addColorStop(0, 'rgba(92, 92, 104, 0.55)');
+    grad.addColorStop(1, 'rgba(24, 24, 32, 0.55)');
   }
   ctx.fillStyle = grad;
   roundRectPath(ctx, x + pad, y, w, h, radius);
   ctx.fill();
 
+  // bisel metálico, igual que en la ruleta de recompensas
+  ctx.save();
+  roundRectPath(ctx, x + pad, y, w, h, radius);
+  ctx.clip();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.beginPath();
+  ctx.moveTo(x + pad + 3, y + h - 3);
+  ctx.lineTo(x + pad + 3, y + 3);
+  ctx.lineTo(x + pad + w - 3, y + 3);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(x + pad + 3, y + h - 3);
+  ctx.lineTo(x + pad + w - 3, y + h - 3);
+  ctx.lineTo(x + pad + w - 3, y + 3);
+  ctx.stroke();
+  ctx.restore();
+
   if (highlighted) {
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
     roundRectPath(ctx, x + pad, y, w, h, radius);
     ctx.stroke();
   } else {
@@ -382,15 +534,28 @@ function generatePlayerSpinFrame(users, avatarMap, tierColor, forcedWinner = nul
   const canvas = createCanvas(SPIN_W, SPIN_H);
   const ctx = canvas.getContext('2d');
   const { r, g, b } = hexToRgb(tierColor);
+  const centerCx = SPIN_CENTER * SPIN_CELL_W + SPIN_CELL_W / 2;
 
   const bg = ctx.createLinearGradient(0, 0, 0, SPIN_H);
-  bg.addColorStop(0, `rgba(${Math.floor(r * 0.28)}, ${Math.floor(g * 0.22)}, ${Math.floor(b * 0.2)}, 1)`);
-  bg.addColorStop(1, '#120b08');
+  bg.addColorStop(0, `rgba(${Math.floor(r * 0.3)}, ${Math.floor(g * 0.24)}, ${Math.floor(b * 0.22)}, 1)`);
+  bg.addColorStop(1, '#0d0806');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, SPIN_W, SPIN_H);
 
-  ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
-  ctx.fillRect(0, 0, SPIN_W, 4);
+  const spotlight = ctx.createRadialGradient(centerCx, SPIN_H / 2, 10, centerCx, SPIN_H / 2, SPIN_H * 0.9);
+  spotlight.addColorStop(0, 'rgba(255, 200, 90, 0.3)');
+  spotlight.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = spotlight;
+  ctx.fillRect(0, 0, SPIN_W, SPIN_H);
+
+  for (const barY of [0, SPIN_H - 4]) {
+    const bar = ctx.createLinearGradient(0, 0, SPIN_W, 0);
+    bar.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.25)`);
+    bar.addColorStop(0.5, 'rgba(255, 220, 140, 1)');
+    bar.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.25)`);
+    ctx.fillStyle = bar;
+    ctx.fillRect(0, barY, SPIN_W, 4);
+  }
 
   for (let i = 0; i < SPIN_CELLS; i++) {
     const isCenter = i === SPIN_CENTER;
@@ -398,25 +563,28 @@ function generatePlayerSpinFrame(users, avatarMap, tierColor, forcedWinner = nul
     drawPlayerCell(ctx, i, user, avatarMap.get(user?.id) || null, isCenter);
   }
 
-  const cx = SPIN_CENTER * SPIN_CELL_W + SPIN_CELL_W / 2;
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.save();
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.beginPath();
-  ctx.moveTo(cx - 11, 9);
-  ctx.lineTo(cx + 11, 9);
-  ctx.lineTo(cx, 23);
+  ctx.moveTo(centerCx - 12, 9);
+  ctx.lineTo(centerCx + 12, 9);
+  ctx.lineTo(centerCx, 25);
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.moveTo(cx - 11, SPIN_H - 5);
-  ctx.lineTo(cx + 11, SPIN_H - 5);
-  ctx.lineTo(cx, SPIN_H - 19);
+  ctx.moveTo(centerCx - 12, SPIN_H - 5);
+  ctx.lineTo(centerCx + 12, SPIN_H - 5);
+  ctx.lineTo(centerCx, SPIN_H - 21);
   ctx.closePath();
   ctx.fill();
+  ctx.restore();
 
   const fadeW = 110;
   const left = ctx.createLinearGradient(0, 0, fadeW, 0);
-  left.addColorStop(0, 'rgba(9,6,4,0.96)');
-  left.addColorStop(1, 'rgba(9,6,4,0)');
+  left.addColorStop(0, 'rgba(8,5,4,0.97)');
+  left.addColorStop(1, 'rgba(8,5,4,0)');
   ctx.fillStyle = left;
   ctx.fillRect(0, 0, fadeW, SPIN_H);
 
@@ -458,7 +626,7 @@ function buildRewardsFieldValue(table) {
 }
 
 /** Panel de aparición del cofre con estadísticas editables en tiempo real. */
-function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false }) {
+function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false, mapKey = '' }) {
   const table = chestType.rewardTable;
   const arise = table.find((r) => r.key === 'ARISE');
   const feathers = table.find((r) => r.key === 'FEATHERS');
@@ -505,13 +673,13 @@ function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, dis
         ].join('\n'),
       ),
     )
-    .addActionRowComponents(buildParticipateRow(disabled));
+    .addActionRowComponents(buildParticipateRow(disabled, mapKey));
 }
 
-function buildParticipateRow(disabled = false) {
+function buildParticipateRow(disabled = false, mapKey = '') {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('xerion_participate')
+      .setCustomId(`xerion_participate::${mapKey}`)
       .setLabel('Participate')
       .setEmoji('🎲')
       .setStyle(ButtonStyle.Success)
@@ -519,10 +687,10 @@ function buildParticipateRow(disabled = false) {
   );
 }
 
-function buildOpenRow(winnerId, disabled = false) {
+function buildOpenRow(winnerId, disabled = false, mapKey = '') {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`xerion_open_${winnerId}`)
+      .setCustomId(`xerion_open::${winnerId}::${mapKey}`)
       .setLabel('Open')
       .setEmoji('🔓')
       .setStyle(ButtonStyle.Primary)
@@ -540,20 +708,21 @@ function buildEmptyChestEmbed(chestType) {
     );
 }
 
-function buildWinnerEmbed(winnerId, { solo = false, chestType }) {
+function buildWinnerEmbed(winnerId, { solo = false, chestType, openDeadlineAt = null, mapKey = '' }) {
+  const countdown = openDeadlineAt ? `\n\n⏳ **Tienes hasta** <t:${toUnixSeconds(openDeadlineAt)}:R> **para abrirlo** — si no, se re-sortea otro ganador.` : '';
   return new ContainerBuilder()
     .setAccentColor(chestType.color)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
           '# 🏆 Tenemos un superviviente',
-          solo
+          (solo
             ? `<@${winnerId}> entró en solitario. Nadie más se presentó — el ${chestType.name} es suyo por derecho.`
-            : `<@${winnerId}> ha sobrevivido a todos los demás.\n\nEl ${chestType.name} es tuyo — si te atreves a abrirlo.`,
+            : `<@${winnerId}> ha sobrevivido a todos los demás.\n\nEl ${chestType.name} es tuyo — si te atreves a abrirlo.`) + countdown,
         ].join('\n'),
       ),
     )
-    .addActionRowComponents(buildOpenRow(winnerId));
+    .addActionRowComponents(buildOpenRow(winnerId, false, mapKey));
 }
 
 const OPENING_STEPS = ['🔒 The chest creaks open...', '✨ Something stirs inside...'];
@@ -618,9 +787,15 @@ const ROLE_LABELS = { ARISE: 'ARISE 💀', KING: 'KING 👑', GOAT: 'GOAT 🐐',
 /** Línea que muestra el beneficio activo de rol (según el más raro que tenga el usuario). */
 function roleBenefitLine(stats) {
   const key = highestRoleKey(stats);
-  if (!key) return '🎁 **Beneficio de rol:** Ninguno todavía — gana un rol para desbloquear un bonus permanente de Feathers.';
-  const pct = Math.round(ROLE_FEATHER_BONUS[key] * 100);
-  return `🎁 **Beneficio de rol activo:** ${ROLE_LABELS[key]} — **+${pct}%** Feathers en cada premio`;
+  const achievementPct = Math.round(achievementBonusMultiplier(stats) * 1000) / 10;
+  const achievementPart = achievementPct > 0 ? ` **+${achievementPct}%** por logros` : '';
+  if (!key) {
+    return achievementPct > 0
+      ? `🎁 **Beneficio activo:**${achievementPart} — gana un rol para sumar también el bonus de rareza`
+      : '🎁 **Beneficio de rol:** Ninguno todavía — gana un rol o desbloquea logros para sumar un bonus permanente de Feathers.';
+  }
+  const rolePct = Math.round(ROLE_FEATHER_BONUS[key] * 100);
+  return `🎁 **Beneficio activo:** ${ROLE_LABELS[key]} **+${rolePct}%**${achievementPart} — Feathers en cada premio`;
 }
 
 /** Añade, solo a veces (ver TIP_SHOW_CHANCE), una línea de tip al final de un container. Muta y devuelve el mismo container. */
@@ -918,13 +1093,13 @@ function buildHelpContainer() {
           '`/inventory` [`xn inv`] — balance rápido',
           '`/leaderboard` [`xn top`] — top Feather holders',
           '`/rates` [`xn rates`] — probabilidades de los 3 tipos de cofre',
-          '`/shop` [`xn shop`] — gasta tus Feathers en Escudos y Amuletos',
+          '`/shop` [`xn shop`] — gasta tus Feathers en Escudos, Amuletos y Plumas Fénix',
           '`/notification` [`xn notif`] — activa o desactiva los DM de cofre',
           '`/stats` [`xn stats`] — estadísticas del servidor',
            '`/help` [`xn help`] — este menú',
            '`/chest` [`xn chest`] — estado del cofre y probabilidad actual',
            '`/daily` [`xn daily`] — reclama 25 Feathers cada 24 horas y suma racha',
-           '`/claim` [`xn claim`] — reclama un cofre que ya ganaste pero no habías abierto',
+           '`/claim` [`xn claim`] — recolecta las Feathers pasivas que dan tus roles',
            '`/history` [`xn history`] — últimas recompensas obtenidas',
            '`/achievements` [`xn achievements`] — logros desbloqueados',
            '`/rank` [`xn rank`] — tu posición y progreso',
@@ -938,7 +1113,13 @@ function buildHelpContainer() {
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(['**Comando de Administrador**', '`/spawn` [`xn spawn`] — fuerza la aparición de un cofre (opcionalmente elige el tipo)'].join('\n')),
+      new TextDisplayBuilder().setContent(['**Comando de Administrador**', '`/spawn` [`xn spawn`] — fuerza la aparición de un cofre (opcionalmente elige el tipo), sin importar si ya hay uno activo — máximo 5 a la vez, uno cada 30s'].join('\n')),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        ['**Habla con Xerion**', 'Mencióname (`@Xerion`) o responde a uno de mis mensajes generados por IA para charlar.'].join('\n'),
+      ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
@@ -985,18 +1166,13 @@ function buildHistoryContainer(rows) {
 }
 
 function buildAchievementsContainer(stats) {
-  const achievements = [
-    [stats.chests_participated >= 1, 'Primer salto', 'Participa en tu primer cofre.'],
-    [stats.chests_won >= 1, 'Último superviviente', 'Gana tu primer cofre.'],
-    [stats.chests_won >= 10, 'Imparable', 'Gana 10 cofres.'],
-    [stats.total_feathers_earned >= 100, 'Plumaje de acero', 'Consigue 100 Feathers en total.'],
-    [stats.star_x_count >= 1, 'Primera estrella', 'Obtén STAR X.'],
-    [stats.aura_infinite_count >= 1, 'Aura despertada', 'Obtén AURA INFINITE.'],
-    [stats.king_count >= 1, 'Corona de Xerion', 'Obtén KING.'],
-    [stats.goat_count >= 1, 'Cabra suprema', 'Obtén GOAT.'],
-    [stats.arise_count >= 1, 'El que regresa', 'Obtén ARISE.'],
-  ];
-  const lines = achievements.map(([done, name, description]) => `${done ? '✅' : '⬜'} **${name}** — ${description}`);
+  const completed = countCompletedAchievements(stats);
+  const bonusPct = Math.round(achievementBonusMultiplier(stats) * 1000) / 10; // 1 decimal
+  const lines = ACHIEVEMENTS.map((a) => `${a.check(stats) ? '✅' : '⬜'} **${a.name}** — ${a.description}`);
+  lines.push(
+    '',
+    `🎖️ **${completed}/${ACHIEVEMENTS.length} logros** — +${bonusPct}% Feathers extra por logros desbloqueados`,
+  );
   return buildSimpleContainer('Achievements', 'Logros permanentes', lines, CONFIG.COLORS.AURA_INFINITE);
 }
 
@@ -1037,6 +1213,41 @@ function buildChestStatusContainer(channelId, state, active) {
     ],
     active?.chestType?.color || CONFIG.COLORS.BRAND,
   );
+}
+
+/** Panel de resultado para /claim (el ingreso pasivo por rol, no cofres — eso ya lo resuelve el auto re-sorteo). */
+function buildRoleIncomeContainer(result) {
+  if (!result.hasAnyRole) {
+    return buildSimpleContainer(
+      'Ingreso de Roles',
+      'Todavía no tienes ningún rol',
+      [
+        '🎁 Cada rol que ganes en un cofre te da Feathers cada cierto tiempo, solo por tenerlo.',
+        'Entre más raro el rol, más Feathers da y más tiempo hay que esperar entre cobro y cobro.',
+        'Gana tu primer rol en un cofre y vuelve a usar `/claim` cuando esté listo.',
+      ],
+      CONFIG.COLORS.FEATHERS,
+    );
+  }
+
+  const lines = [];
+  if (result.claimed.length > 0) {
+    lines.push(`✅ **Recolectaste ${FEATHER_EMOJI} +${formatNumber(result.totalAmount)} Feathers:**`);
+    for (const c of result.claimed) {
+      lines.push(`${ROLE_LABELS[c.key]} — +${formatNumber(c.amount)} ${FEATHER_EMOJI}`);
+    }
+  } else {
+    lines.push('⏱️ Ningún rol tiene ingreso listo para cobrar todavía.');
+  }
+
+  if (result.pending.length > 0) {
+    lines.push('', '**Próximos cobros:**');
+    for (const p of result.pending) {
+      lines.push(`${ROLE_LABELS[p.key]} — listo <t:${toUnixSeconds(p.readyAt)}:R>`);
+    }
+  }
+
+  return buildSimpleContainer('Ingreso de Roles', 'Recolecta el ingreso pasivo de tus roles', lines, CONFIG.COLORS.FEATHERS);
 }
 
 function buildStreakContainer(stats) {
@@ -1133,6 +1344,7 @@ module.exports = {
   buildHelpContainer,
   buildSimpleContainer,
   buildDailyContainer,
+  buildRoleIncomeContainer,
   buildHistoryContainer,
   buildAchievementsContainer,
   buildRankContainer,

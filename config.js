@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.0 — config.js
+ *  XERION v1.8.1 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.8.0',
+  VERSION: '1.8.1',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -42,16 +42,16 @@ const CONFIG = {
   // Postgres por canal y se resetean únicamente cuando aparece un cofre.
   // ----------------------------------------------------------------------
   BASE_SPAWN_CHANCE: 0,
-  PROBABILITY_STEP_MESSAGES: 100,
+  PROBABILITY_STEP_MESSAGES: 115,
   PROBABILITY_STEP_INCREASE: 0.01,
   MAX_SPAWN_CHANCE: 1,
 
   JOIN_WINDOW_MS: 5 * 60 * 1000, // 5 minutos para pulsar "Participate"
 
-  // Ritmo del minijuego de eliminación
-  // Pausa deliberada de 3 segundos entre cada ronda de eliminación — le da
-  // tiempo a la gente de leer quién cayó antes de que llegue la siguiente.
-  INTRO_DELAY_MS: 250,
+  // Ritmo del minijuego de eliminación: al cerrarse el cofre hay una pausa
+  // de 10s antes de la primera eliminación (para que la gente alcance a leer
+  // quién entró), y luego cada ronda sigue a su propio ritmo de 3s.
+  INTRO_DELAY_MS: 10000,
   ELIMINATION_DELAY_MIN_MS: 3000,
   ELIMINATION_DELAY_MAX_MS: 3000,
   BATCH_THRESHOLD: 10,
@@ -61,6 +61,12 @@ const CONFIG = {
   // resto de participantes (con una ruleta de jugadores) para que el canal
   // nunca se quede trabado esperando a alguien que no vuelve.
   UNCLAIMED_CHEST_TIMEOUT_MS: 5 * 60 * 1000,
+
+  // Spawns forzados por el owner (bypasean "ya hay un cofre activo"): tope
+  // de cuántos pueden estar vivos a la vez y cuánto hay que esperar entre
+  // uno y el siguiente, para no sobrecargar al bot ni a Discord.
+  OWNER_FORCE_MAX_ACTIVE: 5,
+  OWNER_FORCE_COOLDOWN_MS: 30 * 1000,
 
   COLORS: {
     BRAND: 0xe8442c,
@@ -344,6 +350,64 @@ function highestRoleKey(counts = {}) {
   if (counts.star_x_count > 0) return 'STAR_X';
   return null;
 }
+
+// ============================================================================
+// LOGROS — se definen UNA sola vez acá para que el panel de /achievements y
+// el bonus de Feathers usen exactamente los mismos criterios (nunca se
+// desalinean). Más difíciles que antes, y cada uno desbloqueado suma un
+// bonus pequeño y permanente — no cambia mucho por sí solo, pero se nota
+// si vas completando varios.
+// ============================================================================
+
+const ACHIEVEMENTS = [
+  { key: 'first_jump', name: 'Primer salto', description: 'Participa en tu primer cofre.', check: (s) => (s.chests_participated || 0) >= 1 },
+  { key: 'first_win', name: 'Último superviviente', description: 'Gana tu primer cofre.', check: (s) => (s.chests_won || 0) >= 1 },
+  { key: 'unstoppable', name: 'Imparable', description: 'Gana 25 cofres.', check: (s) => (s.chests_won || 0) >= 25 },
+  { key: 'veteran', name: 'Veterano de Xerion', description: 'Gana 75 cofres.', check: (s) => (s.chests_won || 0) >= 75 },
+  { key: 'steel_feathers', name: 'Plumaje de acero', description: 'Consigue 1,000 Feathers en total.', check: (s) => (s.total_feathers_earned || 0) >= 1000 },
+  { key: 'feather_fortune', name: 'Fortuna emplumada', description: 'Consigue 10,000 Feathers en total.', check: (s) => (s.total_feathers_earned || 0) >= 10000 },
+  { key: 'first_star', name: 'Primera estrella', description: 'Obtén STAR X.', check: (s) => (s.star_x_count || 0) >= 1 },
+  { key: 'aura_awakened', name: 'Aura despertada', description: 'Obtén AURA INFINITE.', check: (s) => (s.aura_infinite_count || 0) >= 1 },
+  { key: 'crown', name: 'Corona de Xerion', description: 'Obtén KING.', check: (s) => (s.king_count || 0) >= 1 },
+  { key: 'supreme_goat', name: 'Cabra suprema', description: 'Obtén GOAT.', check: (s) => (s.goat_count || 0) >= 1 },
+  { key: 'the_one_who_returns', name: 'El que regresa', description: 'Obtén ARISE.', check: (s) => (s.arise_count || 0) >= 1 },
+  {
+    key: 'collector',
+    name: 'Coleccionista',
+    description: 'Ten los 5 roles de cofre a la vez.',
+    check: (s) => [s.star_x_count, s.aura_infinite_count, s.goat_count, s.king_count, s.arise_count].every((c) => (c || 0) >= 1),
+  },
+  { key: 'streak_week', name: 'Constancia de hierro', description: 'Llega a una racha de 7 días en /daily.', check: (s) => (s.best_streak || 0) >= 7 },
+  { key: 'streak_month', name: 'Disciplina absoluta', description: 'Llega a una racha de 30 días en /daily.', check: (s) => (s.best_streak || 0) >= 30 },
+];
+
+const ACHIEVEMENT_BONUS_PER_UNLOCK = 0.005; // +0.5% Feathers por logro desbloqueado
+const ACHIEVEMENT_BONUS_CAP = 0.05; // tope de +5% (10 logros de 14)
+
+function countCompletedAchievements(stats = {}) {
+  return ACHIEVEMENTS.reduce((n, a) => n + (a.check(stats) ? 1 : 0), 0);
+}
+
+/** Extra a SUMAR sobre featherBonusMultiplier (no incluye el 1.0 base). */
+function achievementBonusMultiplier(stats = {}) {
+  return Math.min(countCompletedAchievements(stats) * ACHIEVEMENT_BONUS_PER_UNLOCK, ACHIEVEMENT_BONUS_CAP);
+}
+
+/** Multiplicador total de Feathers: bonus de rol + bonus de logros, ya combinados. */
+function totalFeatherMultiplier(stats = {}) {
+  return featherBonusMultiplier(stats) + achievementBonusMultiplier(stats);
+}
+// tiempo (mínimo 3h). Entre más raro el rol, más Feathers da Y más tiempo
+// hay que esperar entre cobro y cobro. Se reclama todo junto con /claim.
+// ============================================================================
+
+const ROLE_PASSIVE_INCOME = {
+  STAR_X: { intervalMs: 3 * 60 * 60 * 1000, amount: 4 },
+  AURA_INFINITE: { intervalMs: 10 * 60 * 60 * 1000, amount: 15 },
+  GOAT: { intervalMs: 20 * 60 * 60 * 1000, amount: 40 },
+  KING: { intervalMs: 48 * 60 * 60 * 1000, amount: 100 },
+  ARISE: { intervalMs: 72 * 60 * 60 * 1000, amount: 160 },
+};
 const SAFE_MENTIONS = { parse: [] };
 function pingOnly(userIds) {
   return { parse: [], users: [...new Set(userIds)] };
@@ -357,7 +421,8 @@ function pingOnly(userIds) {
 
 const TIPS = [
   'Activa `/notification` para recibir un DM apenas aparezca un cofre — así nunca llegas tarde.',
-  'Si ganaste un cofre y no lo abriste a tiempo, usa `/claim` para reclamarlo aunque el mensaje ya haya quedado arriba en el chat.',
+  'Si nadie reclama un cofre en 5 minutos, el bot re-sortea otro ganador automáticamente — no hace falta que hagas nada.',
+  'Cada rol que tengas te da Feathers pasivas cada cierto tiempo, solo por tenerlo — revisa `/claim` para cobrarlas.',
   'Tu racha de `/daily` se puede mostrar en tu apodo — revisa `/streak` para activarla o desactivarla.',
   'Un Escudo de `/shop` te protege automáticamente en la primera ronda de tu próxima batalla.',
   'La Pluma Fénix es cara, pero te revive una vez si te eliminan — puede ser tu única oportunidad de seguir en juego.',
@@ -410,4 +475,9 @@ module.exports = {
   ROLE_FEATHER_BONUS,
   featherBonusMultiplier,
   highestRoleKey,
+  ROLE_PASSIVE_INCOME,
+  ACHIEVEMENTS,
+  countCompletedAchievements,
+  achievementBonusMultiplier,
+  totalFeatherMultiplier,
 };

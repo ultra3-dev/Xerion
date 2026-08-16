@@ -1,4 +1,4 @@
-# Xerion v1.8.0
+# Xerion v1.8.1
 
 Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Hecho con **discord.js v14 (Components V2)**, **Express** y **PostgreSQL (Neon)**.
 
@@ -37,9 +37,13 @@ DISCORD_TOKEN=
 CLIENT_ID=
 GUILD_ID=        # opcional, solo para pruebas — ver abajo
 DATABASE_URL=
+GROQ_API_KEY=    # opcional — activa el chat de IA y los resúmenes de eliminación con humor
+GROQ_MODEL=      # opcional, por defecto llama-3.1-8b-instant
 ```
 
 `GUILD_ID` es opcional: si lo pones, los slash commands se registran al instante pero **solo en ese servidor** (ideal mientras pruebas). Sin él, el registro es global y la primera vez puede tardar hasta 1 hora en aparecer en todos los servidores.
+
+`GROQ_API_KEY` también es opcional: sin ella, el bot funciona exactamente igual, simplemente sin el chat de IA (mencionar a `@Xerion`) ni los resúmenes con humor en la ronda decisiva de cada batalla. Sacala gratis en [console.groq.com](https://console.groq.com).
 
 Todo lo específico de tu servidor (canal del cofre, ID del dueño, IDs de los roles, probabilidades, prefijo) vive en el objeto `CONFIG` al principio de `index.js` — no en variables de entorno, para que sea fácil de editar de un vistazo.
 
@@ -56,7 +60,7 @@ npm start
 2. En Render, crea un **Web Service** (no "Background Worker" — necesitas el puerto HTTP para el paso 6) apuntando a tu repo.
 3. Build command: `npm install`
 4. Start command: `npm start`
-5. En **Environment**, añade `DISCORD_TOKEN`, `CLIENT_ID` y `DATABASE_URL` (Render define `PORT` solo).
+5. En **Environment**, añade `DISCORD_TOKEN`, `CLIENT_ID` y `DATABASE_URL` (Render define `PORT` solo). Si quieres el chat de IA, añade también `GROQ_API_KEY`.
 6. Node: este proyecto pide Node **22.12 o superior** (ya está declarado en `package.json`, Render lo detecta solo).
 
 ## 6. UptimeRobot (para que no se duerma)

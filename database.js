@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.0 — database.js
+ *  XERION v1.8.1 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -16,7 +16,7 @@
 'use strict';
 
 const { Pool } = require('pg');
-const { CONFIG, SHOP_ITEMS, featherBonusMultiplier } = require('./config.js');
+const { CONFIG, SHOP_ITEMS, totalFeatherMultiplier, ROLE_PASSIVE_INCOME } = require('./config.js');
 
 const pool = new Pool({
   connectionString: CONFIG.DATABASE_URL,
@@ -52,8 +52,22 @@ const XERION_USERS_COLUMNS = [
   ['current_streak', 'INTEGER NOT NULL DEFAULT 0'],
   ['best_streak', 'INTEGER NOT NULL DEFAULT 0'],
   ['streak_visible', 'BOOLEAN NOT NULL DEFAULT TRUE'],
+  ['star_x_income_at', 'TIMESTAMPTZ'],
+  ['aura_infinite_income_at', 'TIMESTAMPTZ'],
+  ['goat_income_at', 'TIMESTAMPTZ'],
+  ['king_income_at', 'TIMESTAMPTZ'],
+  ['arise_income_at', 'TIMESTAMPTZ'],
   ['created_at', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()'],
 ];
+
+// Mapeo rol -> { columna de conteo, columna del reloj de ingreso pasivo }.
+const ROLE_INCOME_COLUMNS = {
+  STAR_X: { count: 'star_x_count', at: 'star_x_income_at' },
+  AURA_INFINITE: { count: 'aura_infinite_count', at: 'aura_infinite_income_at' },
+  GOAT: { count: 'goat_count', at: 'goat_income_at' },
+  KING: { count: 'king_count', at: 'king_income_at' },
+  ARISE: { count: 'arise_count', at: 'arise_income_at' },
+};
 
 const XERION_STATE_COLUMNS = [
   ['message_counter', 'INTEGER NOT NULL DEFAULT 0'],
@@ -282,14 +296,11 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
       return false;
     }
 
-    // Beneficios de rol: el rol más raro que tengas sube tus Feathers ganados.
+    // Beneficios de rol + logros: suben tus Feathers ganados.
     // Se calcula antes de guardar el historial para que quede el monto real acreditado.
     if (reward.kind === 'currency') {
-      const { rows: bonusRows } = await client.query(
-        `SELECT arise_count, king_count, goat_count, aura_infinite_count, star_x_count FROM xerion_users WHERE user_id = $1;`,
-        [userId],
-      );
-      const multiplier = featherBonusMultiplier(bonusRows[0] || {});
+      const { rows: bonusRows } = await client.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
+      const multiplier = totalFeatherMultiplier(bonusRows[0] || {});
       reward.amount = Math.round((reward.amount || 0) * multiplier); // el llamador reutiliza este objeto para el embed de resultado
     }
 
@@ -321,7 +332,11 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
         STAR_X: 'star_x_count',
       }[reward.key];
       if (roleColumn) {
-        await client.query(`UPDATE xerion_users SET ${roleColumn} = ${roleColumn} + 1 WHERE user_id = $1;`, [userId]);
+        // El reloj de ingreso pasivo arranca la primera vez que se gana el rol
+        // (COALESCE no lo toca en victorias siguientes del mismo rol).
+        const incomeColumn = ROLE_INCOME_COLUMNS[reward.key]?.at;
+        const incomeSet = incomeColumn ? `, ${incomeColumn} = COALESCE(${incomeColumn}, NOW())` : '';
+        await client.query(`UPDATE xerion_users SET ${roleColumn} = ${roleColumn} + 1${incomeSet} WHERE user_id = $1;`, [userId]);
       }
     }
 
@@ -611,11 +626,8 @@ async function consumeLuckCharmIfAvailable(userId) {
  */
 async function claimDaily(userId, identity = {}) {
   await ensureUser(userId, identity);
-  const { rows: bonusRows } = await pool.query(
-    `SELECT arise_count, king_count, goat_count, aura_infinite_count, star_x_count FROM xerion_users WHERE user_id = $1;`,
-    [userId],
-  );
-  const dailyReward = Math.round(25 * featherBonusMultiplier(bonusRows[0] || {}));
+  const { rows: bonusRows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
+  const dailyReward = Math.round(25 * totalFeatherMultiplier(bonusRows[0] || {}));
   const { rows } = await pool.query(
     `UPDATE xerion_users
      SET feathers = feathers + $2,
@@ -652,6 +664,53 @@ async function claimDaily(userId, identity = {}) {
 async function setStreakVisible(userId, visible) {
   await ensureUser(userId);
   await pool.query(`UPDATE xerion_users SET streak_visible = $2 WHERE user_id = $1;`, [userId, visible]);
+}
+
+/**
+ * Recolecta el ingreso pasivo de todos los roles que el usuario tenga
+ * listos para cobrar. Cada rol cobra como máximo una vez por intervalo
+ * (no se acumulan periodos atrasados) — así el sistema sigue siendo justo
+ * y difícil, sin premiar a quien se desconecta mucho tiempo.
+ */
+async function collectRoleIncome(userId) {
+  await ensureUser(userId);
+  const { rows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
+  const row = rows[0];
+  const now = Date.now();
+
+  const claimed = [];
+  const pending = [];
+  const setClauses = [];
+  const params = [userId];
+  let totalAmount = 0;
+
+  for (const [key, cols] of Object.entries(ROLE_INCOME_COLUMNS)) {
+    if ((row[cols.count] || 0) <= 0) continue; // no tiene ese rol
+    const { intervalMs, amount } = ROLE_PASSIVE_INCOME[key];
+    const lastAt = row[cols.at] ? new Date(row[cols.at]).getTime() : null;
+    if (lastAt === null || now - lastAt >= intervalMs) {
+      claimed.push({ key, amount });
+      totalAmount += amount;
+      params.push(new Date(now));
+      setClauses.push(`${cols.at} = $${params.length}`);
+    } else {
+      pending.push({ key, readyAt: new Date(lastAt + intervalMs) });
+    }
+  }
+
+  if (claimed.length > 0) {
+    params.push(totalAmount);
+    await pool.query(
+      `UPDATE xerion_users
+       SET feathers = feathers + $${params.length},
+           total_feathers_earned = total_feathers_earned + $${params.length},
+           ${setClauses.join(', ')}
+       WHERE user_id = $1;`,
+      params,
+    );
+  }
+
+  return { claimed, pending, totalAmount, hasAnyRole: claimed.length + pending.length > 0 };
 }
 
 /**
@@ -712,6 +771,7 @@ module.exports = {
   consumeLuckCharmIfAvailable,
   claimDaily,
   setStreakVisible,
+  collectRoleIncome,
   resetUserData,
   getRecentAwards,
 };

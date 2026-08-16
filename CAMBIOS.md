@@ -1,3 +1,46 @@
+# Xerion v1.8.1 — Qué cambió
+
+## Ritmo de eliminación
+
+- Cuando el cofre se cierra, ahora hay **10 segundos** de pausa antes de la primera eliminación (para que la gente alcance a leer quién entró), y de ahí en adelante sigue a 3s por ronda como ya estaba.
+- Probabilidad de aparición un poco más difícil (100 → 115 mensajes por cada +1%), ya que ahora el owner puede forzar cofres también.
+
+## `/claim` — ahora es ingreso pasivo por rol
+
+- Como el auto re-sorteo (de la 1.8.0) ya resuelve el problema de cofres sin reclamar, `/claim` se repropuso: cada rol que tengas te da Feathers cada cierto tiempo, solo por tenerlo.
+- Mínimo 3h entre cobros. Entre más raro el rol, más da y más hay que esperar: STAR X (4 · 3h), Aura Infinite (15 · 10h), GOAT (40 · 20h), KING (100 · 48h), ARISE (160 · 72h).
+- El reloj de cada rol arranca la primera vez que lo ganas, no en cada re-victoria del mismo rol.
+
+## Logros más difíciles, con beneficio
+
+- 14 logros (antes 9), con umbrales más altos (ej. ganar 25 y 75 cofres, 1,000 y 10,000 Feathers totales, rachas de 7 y 30 días, tener los 5 roles a la vez).
+- Cada logro desbloqueado suma +0.5% Feathers permanente (tope +5%), sumado al bonus de rareza de rol. Se ve todo en `/profile` y `/achievements`.
+
+## Contador en el cofre ganado
+
+- El embed del ganador ahora muestra cuánto tiempo le queda para abrirlo, con el mismo tipo de contador en vivo que ya tenía el cofre al aparecer.
+
+## Canvas con diseño brutal
+
+- Rediseño completo de la ruleta de recompensas: bisel metálico en cada celda, rayos de luz y resplandor dorado detrás de la celda ganadora, esquinas acentuadas estilo carta premium, y un tratamiento propio para "Nothing" (ya no se ve apagada). El mismo estilo se aplicó a la ruleta de jugadores del re-sorteo.
+
+## `/spawn` sin restricciones (solo owner)
+
+- El comando de spawn del owner ahora **ignora** la regla de "ya hay un cofre activo" — puede forzar hasta 5 cofres a la vez, uno cada 30 segundos, cada uno corriendo de forma independiente (sus propios botones, su propio ciclo de vida) sin chocar entre sí ni con el cofre normal del canal si lo hay.
+- Los cofres forzados no se guardan en base de datos (son de prueba) — si el bot se reinicia se pierden, pero el cofre normal del canal nunca se ve afectado por esto.
+- El spawn automático por actividad de mensajes sigue exactamente igual que siempre (un cofre a la vez).
+
+## Chat con IA (Groq)
+
+- Menciona a `@Xerion` en cualquier canal (o responde a uno de sus mensajes generados por IA) para charlar. No hace falta comando — es directo por mención, para no gastar de los 20 comandos disponibles.
+- Tiene personalidad: responde con humor según cómo lo traten, escribe corto y casual como una persona real, en el mismo idioma en que le escriban.
+- **Nunca pinguea a nadie, bajo ninguna circunstancia** — ni con `@everyone`, ni si se lo piden directamente, ni disfrazado de otra forma. Esto está garantizado a nivel de código (todo mensaje de la IA se manda con `allowedMentions` desactivado, que es lo que Discord usa para decidir si algo notifica o no), no solo con instrucciones al modelo — así que es imposible que falle aunque alguien intente convencer a la IA de lo contrario.
+- Los resúmenes de eliminación con humor solo se generan en la ronda decisiva de cada batalla (no en cada ronda) para cuidar los tokens — el resto de rondas sigue usando las frases normales del bot.
+- Si no configuras `GROQ_API_KEY`, el bot sigue funcionando exactamente igual, solo sin estas dos cosas — nunca rompe nada por no tenerla.
+- Nota técnica: se implementó con el `fetch` nativo de Node contra la API de Groq (compatible con OpenAI) en vez del paquete `groq-sdk`, para no depender de una librería nueva que no se pudiera verificar en este entorno — el resultado es idéntico, solo más liviano.
+
+---
+
 # Xerion v1.8.0 — Qué cambió
 
 ## Rol nuevo: STAR X (el más básico)

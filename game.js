@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.0 — game.js
+ *  XERION v1.8.1 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -43,6 +43,7 @@ const {
 } = require('./config.js');
 
 const db = require('./database.js');
+const ai = require('./ai.js');
 const visuals = require('./visuals.js');
 
 // ============================================================================
@@ -57,6 +58,31 @@ const visuals = require('./visuals.js');
 
 /** @type {Map<string, object>} channelId -> ChestState */
 const activeChests = new Map();
+
+// ============================================================================
+// CHAT CON IA — solo en memoria, nada de esto se persiste (no hace falta:
+// es solo para saber si un reply "continúa" una charla con la IA, y para
+// evitar spam/costos con un cooldown corto por usuario).
+// ============================================================================
+
+const AI_MESSAGE_ID_CAP = 300;
+const aiMessageIds = new Map(); // messageId -> true, FIFO acotado
+function trackAiMessageId(id) {
+  aiMessageIds.set(id, true);
+  if (aiMessageIds.size > AI_MESSAGE_ID_CAP) {
+    aiMessageIds.delete(aiMessageIds.keys().next().value);
+  }
+}
+
+const AI_CHAT_COOLDOWN_MS = 8000;
+const aiChatCooldowns = new Map(); // userId -> timestamp del último uso
+function isOnAiChatCooldown(userId) {
+  const last = aiChatCooldowns.get(userId);
+  return Boolean(last) && Date.now() - last < AI_CHAT_COOLDOWN_MS;
+}
+function markAiChatCooldown(userId) {
+  aiChatCooldowns.set(userId, Date.now());
+}
 
 function chestSnapshot(state) {
   return {
@@ -79,13 +105,15 @@ function chestSnapshot(state) {
 }
 
 function persistChestState(state) {
+  if (state.isForced) return Promise.resolve(); // cofres forzados por el owner: solo en memoria, no se persisten
   return db.saveActiveChest(state.channelId, chestSnapshot(state)).catch((err) => {
     console.error('[Xerion] No se pudo guardar el snapshot del cofre:', err.message);
   });
 }
 
-async function clearPersistedChest(channelId) {
-  await db.clearActiveChest(channelId).catch((err) => {
+async function clearPersistedChest(state) {
+  if (state.isForced) return; // nunca se guardaron, nada que borrar
+  await db.clearActiveChest(state.channelId).catch((err) => {
     console.error('[Xerion] No se pudo limpiar el snapshot final del cofre:', err.message);
   });
 }
@@ -134,6 +162,26 @@ function decideBatchSize(remainingCount) {
   return Math.max(2, Math.floor(remainingCount * CONFIG.BATCH_FRACTION));
 }
 
+/**
+ * Pide a la IA un resumen con humor de la ronda decisiva y lo publica como
+ * un mensaje aparte, sin pings (los pings reales ya los mandó la línea de
+ * eliminación normal). Completamente best-effort: si la IA no responde a
+ * tiempo o falla, simplemente no se manda nada — el juego ya siguió su curso.
+ */
+async function generateAndSendEliminationFlavor(channel, eliminatedIds, chestTypeName) {
+  const names = await Promise.all(
+    eliminatedIds.map(async (id) => {
+      const member = await channel.guild.members.fetch(id).catch(() => null);
+      if (member) return member.displayName;
+      const user = await channel.client.users.fetch(id).catch(() => null);
+      return user?.username || 'un jugador';
+    }),
+  );
+  const flavor = await ai.generateEliminationFlavor({ eliminatedNames: names, chestTypeName });
+  if (!flavor) return;
+  await channel.send({ content: `🎙️ ${flavor}`, allowedMentions: SAFE_MENTIONS }).catch(() => {});
+}
+
 // ============================================================================
 // APARICIÓN DEL COFRE
 // ============================================================================
@@ -156,20 +204,71 @@ async function trySpawnChest(channel, forcedTypeKey = null) {
   }
 }
 
-async function spawnChest(channel, forcedTypeKey) {
+/**
+ * Spawns forzados por el owner: ignoran a propósito la regla de "ya hay un
+ * cofre activo en el canal" — cada uno vive en su propio slot interno, así
+ * que no chocan entre sí ni con el cofre normal del canal si hay uno. Para
+ * evitar sobrecargar al bot (o a Discord), se limitan a un máximo de
+ * OWNER_FORCE_MAX_ACTIVE simultáneos y a un spawn cada OWNER_FORCE_COOLDOWN_MS.
+ * Nunca se persisten en base de datos — son cofres de prueba, no parte del
+ * progreso real de nadie, así que si el bot se reinicia simplemente se pierden
+ * (el cofre normal del canal, si lo hay, no se ve afectado en absoluto).
+ */
+const ownerForceState = { activeCount: 0, lastSpawnAt: 0 };
+
+function ownerForceStatus() {
+  const msLeft = Math.max(0, ownerForceState.lastSpawnAt + CONFIG.OWNER_FORCE_COOLDOWN_MS - Date.now());
+  return { activeCount: ownerForceState.activeCount, cooldownMsLeft: msLeft };
+}
+
+async function tryForceSpawnChest(channel, forcedTypeKey = null) {
+  const { activeCount, cooldownMsLeft } = ownerForceStatus();
+  if (activeCount >= CONFIG.OWNER_FORCE_MAX_ACTIVE) {
+    return { spawned: false, reason: 'max' };
+  }
+  if (cooldownMsLeft > 0) {
+    return { spawned: false, reason: 'cooldown', cooldownMsLeft };
+  }
+
+  const mapKey = `force:${channel.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+  ownerForceState.lastSpawnAt = Date.now();
+  ownerForceState.activeCount += 1;
+  activeChests.set(mapKey, { status: 'pending' });
+
+  try {
+    await spawnChest(channel, forcedTypeKey, mapKey, true);
+    return { spawned: true, mapKey };
+  } catch (err) {
+    activeChests.delete(mapKey);
+    ownerForceState.activeCount = Math.max(0, ownerForceState.activeCount - 1);
+    throw err;
+  }
+}
+
+/** Se llama SIEMPRE que un cofre forzado termina su ciclo (se abre, se pierde, etc.), para liberar su cupo. */
+function releaseForceSlot(state) {
+  if (state.isForced && !state.forceSlotReleased) {
+    state.forceSlotReleased = true;
+    ownerForceState.activeCount = Math.max(0, ownerForceState.activeCount - 1);
+  }
+}
+
+async function spawnChest(channel, forcedTypeKey, mapKey = channel.id, isForced = false) {
   const chestType = pickChestType(forcedTypeKey);
-  const previousState = await db.recordChestSpawn(channel.id); // resetea el contador de este canal
+  const previousState = await db.recordChestSpawn(channel.id); // el contador de mensajes es del canal real, no del slot
 
   const endsAt = Date.now() + CONFIG.JOIN_WINDOW_MS;
   const message = await channel.send({
-    components: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState })],
+    components: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState, mapKey })],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: SAFE_MENTIONS,
   });
 
-  const state = activeChests.get(channel.id);
+  const state = activeChests.get(mapKey);
   Object.assign(state, {
     channelId: channel.id,
+    mapKey,
+    isForced,
     messageId: message.id,
     chestType,
     participants: new Set(),
@@ -184,7 +283,7 @@ async function spawnChest(channel, forcedTypeKey) {
     resolveJoinPhase(channel, state).catch((err) => console.error('[Xerion] Error resolviendo la fase de unión del cofre:', err));
   }, CONFIG.JOIN_WINDOW_MS);
 
-  console.log(`[Xerion] ${chestType.name} generado en #${channel.id} (mensaje ${message.id}).`);
+  console.log(`[Xerion] ${chestType.name} generado en #${channel.id} (mensaje ${message.id}${isForced ? ', forzado por el owner' : ''}).`);
 
   notifyChestSpawn(channel.client, chestType, message).catch((err) =>
     console.error('[Xerion] Error enviando notificaciones de cofre:', err),
@@ -228,6 +327,7 @@ function scheduleParticipantCountUpdate(state, message) {
             participantCount: state.participants.size,
             endsAt: state.endsAt,
             serverStats: channelStats,
+            mapKey: state.mapKey,
           }),
         ],
         flags: MessageFlags.IsComponentsV2,
@@ -238,7 +338,8 @@ function scheduleParticipantCountUpdate(state, message) {
 }
 
 async function handleParticipate(interaction) {
-  const state = activeChests.get(interaction.channelId);
+  const mapKey = interaction.customId.split('::')[1] || interaction.channelId;
+  const state = activeChests.get(mapKey);
 
   if (!state || state.status !== 'waiting') {
     return interaction.reply({ content: 'This chest is no longer active.', flags: MessageFlags.Ephemeral });
@@ -275,6 +376,7 @@ async function resolveJoinPhase(channel, state) {
         endsAt: state.endsAt,
         serverStats: currentState,
         disabled: true,
+        mapKey: state.mapKey,
       });
       await message.edit({ components: [finalPanel], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS }).catch(() => {});
     }
@@ -286,8 +388,9 @@ async function resolveJoinPhase(channel, state) {
     await channel
       .send({ components: [visuals.buildEmptyChestEmbed(state.chestType)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS })
       .catch(() => {});
-    activeChests.delete(channel.id);
-    await clearPersistedChest(channel.id);
+    activeChests.delete(state.mapKey);
+    releaseForceSlot(state);
+    await clearPersistedChest(state);
     return;
   }
 
@@ -372,6 +475,14 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
       await channel.send({ content: line, allowedMentions: pingOnly(eliminated) }).catch((err) =>
         console.error('[Xerion] Error enviando eliminación:', err),
       );
+
+      // Resumen con humor de la IA — solo en la ronda decisiva (cuida tokens)
+      // y nunca bloquea el ritmo del juego: se dispara sin esperar su respuesta.
+      if (remaining.length === 1 && ai.isAiAvailable()) {
+        generateAndSendEliminationFlavor(channel, eliminated, state.chestType.name).catch((err) =>
+          console.error('[Xerion] Error generando el resumen de la IA:', err),
+        );
+      }
     } else if (round === 1 && shieldedThisRound.size > 0) {
       await channel
         .send({ content: `🛡️ **Todos los Escudos de Xerion protegieron a sus dueños en esta ronda — nadie cae... por ahora.**`, allowedMentions: SAFE_MENTIONS })
@@ -409,7 +520,7 @@ async function announceWinnerAndArmReroll(channel, state, winnerId, { solo = fal
 
   const winnerMessage = await channel
     .send({
-      components: [visuals.buildWinnerEmbed(winnerId, { solo, chestType: state.chestType })],
+      components: [visuals.buildWinnerEmbed(winnerId, { solo, chestType: state.chestType, openDeadlineAt: state.openDeadlineAt, mapKey: state.mapKey })],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: pingOnly([winnerId]),
     })
@@ -442,7 +553,7 @@ function clearRerollTimer(state) {
  * cofre se pierde y el canal queda libre para que aparezca uno nuevo.
  */
 async function rerollWinner(channel, state) {
-  const current = activeChests.get(channel.id);
+  const current = activeChests.get(state.mapKey);
   if (!current || current !== state || state.status !== 'awaiting_open') return; // ya se reclamó o ya no existe
 
   const failedWinnerId = state.winnerId;
@@ -464,8 +575,9 @@ async function rerollWinner(channel, state) {
         allowedMentions: SAFE_MENTIONS,
       })
       .catch(() => {});
-    activeChests.delete(channel.id);
-    await clearPersistedChest(channel.id);
+    activeChests.delete(state.mapKey);
+    releaseForceSlot(state);
+    await clearPersistedChest(state);
     return;
   }
 
@@ -645,32 +757,23 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
     .catch((err) => console.error('[Xerion] Error enviando el embed de resultado:', err));
 }
 
-/** Busca, entre los cofres activos en memoria, uno que el usuario ya ganó pero no ha abierto. */
-function findPendingChestForUser(userId) {
-  for (const [channelId, state] of activeChests.entries()) {
-    if (state.status === 'awaiting_open' && state.winnerId === userId) {
-      return { channelId, state };
-    }
-  }
-  return null;
-}
-
-/** Ejecuta la apertura de un cofre ya ganado — usada tanto por el botón Open como por /claim. */
+/** Ejecuta la apertura de un cofre ya ganado — usada por el botón Open. */
 async function finalizeChestOpen(channel, state) {
   clearRerollTimer(state);
   state.status = 'opening';
   state.openingClaimed = true;
   await persistChestState(state);
   await openChestSequence(channel, state.winnerId, state.chestType, state);
-  activeChests.delete(channel.id);
-  await clearPersistedChest(channel.id);
+  activeChests.delete(state.mapKey);
+  releaseForceSlot(state);
+  await clearPersistedChest(state);
 }
 
 async function handleOpenChest(interaction) {
-  const state = activeChests.get(interaction.channelId);
-  const expectedCustomId = state ? `xerion_open_${state.winnerId}` : null;
+  const [, customWinnerId, mapKey] = interaction.customId.split('::');
+  const state = activeChests.get(mapKey || interaction.channelId);
 
-  if (!state || state.status !== 'awaiting_open' || interaction.customId !== expectedCustomId) {
+  if (!state || state.status !== 'awaiting_open' || state.winnerId !== customWinnerId) {
     return interaction.reply({ content: 'This chest is no longer available to open.', flags: MessageFlags.Ephemeral });
   }
   if (interaction.user.id !== state.winnerId) {
@@ -771,7 +874,7 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('help').setDescription('List all Xerion commands.'),
   new SlashCommandBuilder().setName('chest').setDescription('See the live chest status and channel chance.'),
   new SlashCommandBuilder().setName('daily').setDescription('Claim 25 Feathers once every 24 hours.'),
-  new SlashCommandBuilder().setName('claim').setDescription('Claim a chest you already won but haven\'t opened yet.'),
+  new SlashCommandBuilder().setName('claim').setDescription('Collect passive Feathers earned by the roles you own.'),
   new SlashCommandBuilder().setName('history').setDescription('View your latest chest rewards.'),
   new SlashCommandBuilder().setName('achievements').setDescription('View your Xerion achievements.'),
   new SlashCommandBuilder().setName('rank').setDescription('View your rank and next milestone.'),
@@ -832,6 +935,8 @@ async function restoreActiveChest(client) {
     const state = {
       ...snapshot,
       channelId: snapshot.channelId,
+      mapKey: snapshot.channelId,
+      isForced: false,
       messageId: snapshot.messageId,
       chestType,
       participants: new Set(snapshot.participants || []),
@@ -839,7 +944,7 @@ async function restoreActiveChest(client) {
       updateScheduled: false,
       timeoutHandle: null,
     };
-    activeChests.set(state.channelId, state);
+    activeChests.set(state.mapKey, state);
 
     if (state.status === 'waiting') {
       const remainingMs = Math.max(0, Number(state.endsAt || Date.now()) - Date.now());
@@ -854,7 +959,7 @@ async function restoreActiveChest(client) {
     } else if (state.status === 'opening' && state.winnerId) {
       openChestSequence(channel, state.winnerId, chestType, state)
         .then(async () => {
-          activeChests.delete(state.channelId);
+          activeChests.delete(state.mapKey);
           await db.clearActiveChest(state.channelId);
         })
         .catch((err) => console.error('[Xerion] Error reanudando apertura:', err));
@@ -880,15 +985,21 @@ async function cmdSpawn(interaction) {
   if (!channel) return interaction.editReply('No pude encontrar el canal configurado para los cofres.');
 
   const tipo = interaction.options.getString('tipo');
-  let spawned;
+  let result;
   try {
-    spawned = await trySpawnChest(channel, tipo);
+    result = await tryForceSpawnChest(channel, tipo);
   } catch (err) {
     console.error('[Xerion] Error forzando la aparición del cofre:', err);
     return interaction.editReply('Something went wrong spawning the chest — check the logs.');
   }
-  if (!spawned) return interaction.editReply('There is already an active chest in that channel.');
-  return interaction.editReply(`✅ Chest spawned in <#${CONFIG.CHEST_CHANNEL_ID}>.`);
+  if (!result.spawned) {
+    if (result.reason === 'max') {
+      return interaction.editReply(`Ya hay ${CONFIG.OWNER_FORCE_MAX_ACTIVE} cofres forzados activos (el máximo). Espera a que se resuelva alguno.`);
+    }
+    const secs = Math.ceil(result.cooldownMsLeft / 1000);
+    return interaction.editReply(`Espera ${secs}s más — solo se puede forzar un cofre cada ${CONFIG.OWNER_FORCE_COOLDOWN_MS / 1000}s.`);
+  }
+  return interaction.editReply(`✅ Chest forzado en <#${CONFIG.CHEST_CHANNEL_ID}> (${ownerForceStatus().activeCount}/${CONFIG.OWNER_FORCE_MAX_ACTIVE} activos).`);
 }
 
 async function cmdProfile(interaction) {
@@ -1058,26 +1169,8 @@ async function cmdDaily(interaction) {
 }
 
 async function cmdClaim(interaction) {
-  const pending = findPendingChestForUser(interaction.user.id);
-  if (!pending) {
-    return interaction.reply({
-      content: 'No tienes ningún cofre pendiente por abrir ahora mismo. Primero tienes que ganar uno participando y sobreviviendo a la eliminación.',
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-  const { channelId, state } = pending;
-  await interaction.reply({ content: `🔓 Reclamando tu cofre pendiente en <#${channelId}>...`, flags: MessageFlags.Ephemeral }).catch(() => {});
-  const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
-  if (!channel) return;
-  if (state.messageId) {
-    const chestMessage = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (chestMessage) {
-      await chestMessage
-        .edit({ components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)], flags: MessageFlags.IsComponentsV2 })
-        .catch(() => {});
-    }
-  }
-  await finalizeChestOpen(channel, state);
+  const result = await db.collectRoleIncome(interaction.user.id);
+  return sendV2(interaction, visuals.buildRoleIncomeContainer(result), false);
 }
 
 async function cmdHistory(interaction) {
@@ -1158,15 +1251,21 @@ async function prefixSpawn(message, args) {
   if (!channel) return noPingReply(message, { content: 'No pude encontrar el canal configurado para los cofres.' });
 
   const tipo = (args[0] || '').toUpperCase();
-  let spawned;
+  let result;
   try {
-    spawned = await trySpawnChest(channel, tipo || null);
+    result = await tryForceSpawnChest(channel, tipo || null);
   } catch (err) {
     console.error('[Xerion] Error forzando la aparición del cofre (prefix):', err);
     return noPingReply(message, { content: 'Something went wrong spawning the chest — check the logs.' });
   }
-  if (!spawned) return noPingReply(message, { content: 'There is already an active chest in that channel.' });
-  return noPingReply(message, { content: `✅ Chest spawned in <#${CONFIG.CHEST_CHANNEL_ID}>.` });
+  if (!result.spawned) {
+    if (result.reason === 'max') {
+      return noPingReply(message, { content: `Ya hay ${CONFIG.OWNER_FORCE_MAX_ACTIVE} cofres forzados activos (el máximo). Espera a que se resuelva alguno.` });
+    }
+    const secs = Math.ceil(result.cooldownMsLeft / 1000);
+    return noPingReply(message, { content: `Espera ${secs}s más — solo se puede forzar un cofre cada ${CONFIG.OWNER_FORCE_COOLDOWN_MS / 1000}s.` });
+  }
+  return noPingReply(message, { content: `✅ Chest forzado en <#${CONFIG.CHEST_CHANNEL_ID}> (${ownerForceStatus().activeCount}/${CONFIG.OWNER_FORCE_MAX_ACTIVE} activos).` });
 }
 
 async function prefixProfile(message) {
@@ -1236,25 +1335,8 @@ async function prefixDaily(message) {
 }
 
 async function prefixClaim(message) {
-  const pending = findPendingChestForUser(message.author.id);
-  if (!pending) {
-    return noPingReply(message, {
-      content: 'No tienes ningún cofre pendiente por abrir ahora mismo. Primero tienes que ganar uno participando y sobreviviendo a la eliminación.',
-    });
-  }
-  const { channelId, state } = pending;
-  await noPingReply(message, { content: `🔓 Reclamando tu cofre pendiente en <#${channelId}>...` }).catch(() => {});
-  const channel = await message.client.channels.fetch(channelId).catch(() => null);
-  if (!channel) return;
-  if (state.messageId) {
-    const chestMessage = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (chestMessage) {
-      await chestMessage
-        .edit({ components: [visuals.buildOpeningStepEmbed('🔒 Abriendo...', state.chestType.color)], flags: MessageFlags.IsComponentsV2 })
-        .catch(() => {});
-    }
-  }
-  await finalizeChestOpen(channel, state);
+  const result = await db.collectRoleIncome(message.author.id);
+  return noPingReply(message, { components: [visuals.buildRoleIncomeContainer(result)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixHistory(message) {
@@ -1357,6 +1439,46 @@ async function handleMessage(message) {
   if (lowerContent === CONFIG.PREFIX || lowerContent.startsWith(`${CONFIG.PREFIX} `)) {
     return handlePrefixCommand(message);
   }
+
+  if (shouldTriggerAiChat(message)) {
+    return handleAiChat(message).catch((err) => console.error('[Xerion] Error en el chat de IA:', err));
+  }
+}
+
+/**
+ * La IA de chat SOLO se activa en dos casos: (1) mencionan/pingean al bot
+ * directamente, o (2) responden a un mensaje que la propia IA generó antes
+ * (para poder seguir la charla sin tener que mencionarlo cada vez). Responder
+ * a mensajes normales del bot (cofres, ganadores, etc.) nunca la activa.
+ */
+function shouldTriggerAiChat(message) {
+  if (message.mentions.has(message.client.user.id)) return true;
+  const refId = message.reference?.messageId;
+  return Boolean(refId && aiMessageIds.has(refId));
+}
+
+async function handleAiChat(message) {
+  if (!ai.isAiAvailable()) return; // sin GROQ_API_KEY configurada — silencio total, no rompe nada
+
+  if (isOnAiChatCooldown(message.author.id)) return;
+  markAiChatCooldown(message.author.id);
+
+  const cleanedContent = message.content.replace(/<@!?\d+>/g, '').trim();
+  if (!cleanedContent) return; // solo era un ping vacío, sin nada que responder
+
+  await message.channel.sendTyping().catch(() => {});
+
+  const reply = await ai.generateChatReply({
+    userMessage: cleanedContent,
+    authorName: message.member?.displayName || message.author.username,
+  });
+  if (!reply) return; // la IA falló o tardó demasiado — mejor silencio que un mensaje roto
+
+  const sent = await noPingReply(message, { content: reply }).catch((err) => {
+    console.error('[Xerion] Error enviando la respuesta de la IA:', err);
+    return null;
+  });
+  if (sent) trackAiMessageId(sent.id);
 }
 
 async function handleInteraction(interaction) {
@@ -1366,8 +1488,8 @@ async function handleInteraction(interaction) {
     }
     if (interaction.isButton()) {
       const id = interaction.customId;
-      if (id === 'xerion_participate') return await handleParticipate(interaction);
-      if (id.startsWith('xerion_open_')) return await handleOpenChest(interaction);
+      if (id.startsWith('xerion_participate')) return await handleParticipate(interaction);
+      if (id.startsWith('xerion_open::')) return await handleOpenChest(interaction);
       if (id === 'xerion_buy_shield') return await handleShopBuy(interaction, 'SHIELD');
       if (id === 'xerion_buy_charm') return await handleShopBuy(interaction, 'CHARM');
       if (id === 'xerion_buy_revive') return await handleShopBuy(interaction, 'REVIVE');

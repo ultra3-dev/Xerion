@@ -1,6 +1,6 @@
 {
   "name": "xerion",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Xerion — difficult Discord chest-drop and elimination game with Components V2, per-channel odds, canvas and persistent rankings.",
   "main": "index.js",
   "type": "commonjs",
