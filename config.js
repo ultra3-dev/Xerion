@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.1 — config.js
+ *  XERION v1.8.2 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.8.1',
+  VERSION: '1.8.2',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.

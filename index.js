@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.1 — index.js
+ *  XERION v1.8.2 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -317,6 +317,33 @@ process.on('uncaughtException', (err) => console.error('[Xerion] Uncaught except
 // ARRANQUE
 // ============================================================================
 
+/**
+ * client.login() puede quedarse colgado para siempre sin resolver NI
+ * rechazar si hay un problema de red saliente hacia Discord (o un token con
+ * espacios/saltos de línea de más) — y sin eso, el proceso nunca loguea
+ * nada ni se reinicia solo. Este límite de tiempo convierte ese silencio en
+ * un error visible en los logs, y hace que Render reinicie el servicio
+ * automáticamente en vez de quedar trabado indefinidamente.
+ */
+async function loginWithTimeout(discordClient, token, timeoutMs = 30000) {
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(
+        new Error(
+          `client.login() no respondió en ${timeoutMs / 1000}s. Casi siempre es DISCORD_TOKEN mal copiado ` +
+            `(espacios o saltos de línea de sobra) o una falla de red saliente hacia Discord — no es un bug de código.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([discordClient.login(token), timeout]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 async function main() {
   await db.initDatabase();
 
@@ -325,7 +352,8 @@ async function main() {
     console.log(`[Xerion] Servidor web escuchando en el puerto ${CONFIG.PORT}.`);
   });
 
-  await client.login(CONFIG.TOKEN);
+  console.log('[Xerion] Conectando con Discord...');
+  await loginWithTimeout(client, CONFIG.TOKEN, 30000);
 
   const shutdown = async (signal) => {
     console.log(`[Xerion] ${signal} recibido — cerrando de forma ordenada...`);

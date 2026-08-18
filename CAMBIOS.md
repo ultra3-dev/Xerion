@@ -1,3 +1,13 @@
+# Xerion v1.8.2 — Qué cambió
+
+## Arreglo: el bot podía quedarse trabado conectando a Discord, en silencio
+
+- Se detectó (con los logs reales de un deploy) que `client.login()` podía quedarse esperando para siempre sin conectar y **sin producir ningún error** — el proceso seguía "vivo" (por eso la web funcionaba normal), pero el bot nunca terminaba de conectarse a Discord ni aparecía online.
+- Ahora hay un límite de 30 segundos: si Discord no responde en ese tiempo, se loguea un error claro y explicando la causa más probable (token mal copiado con espacios/saltos de línea, o una falla de red saliente hacia Discord), y el proceso se reinicia — dejando que Render lo intente de nuevo automáticamente, en vez de quedar trabado sin avisar.
+- No cambia nada más del comportamiento del bot.
+
+---
+
 # Xerion v1.8.1 — Qué cambió
 
 ## Ritmo de eliminación

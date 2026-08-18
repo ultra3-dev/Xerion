@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.1 — ai.js
+ *  XERION v1.8.2 — ai.js
  *  Integración con Groq (API compatible con OpenAI) para dos cosas:
  *   1. Resúmenes de eliminación con humor (solo en la ronda decisiva, para
  *      cuidar tokens — nunca en cada ronda).

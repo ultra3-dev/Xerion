@@ -30,7 +30,7 @@ Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualq
 
 ## 3. Variables de entorno
 
-Copia `.env.example` a `.env` y rellena:
+En Render, estas se ponen directo en el dashboard del servicio (**Environment**) — no hace falta ningún archivo:
 
 ```
 DISCORD_TOKEN=
