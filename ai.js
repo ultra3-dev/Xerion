@@ -1,11 +1,10 @@
 /**
  * ============================================================================
- *  XERION v1.8.2 — ai.js
- *  Integración con Groq (API compatible con OpenAI) para dos cosas:
- *   1. Resúmenes de eliminación con humor (solo en la ronda decisiva, para
- *      cuidar tokens — nunca en cada ronda).
- *   2. Chat: la gente puede hablar con el bot mencionándolo (@Xerion) o
- *      respondiendo a un mensaje que la IA generó antes.
+ *  XERION v1.9.0 — ai.js
+ *  Integración con Groq (API compatible con OpenAI) para el chat: la gente
+ *  puede hablar con el bot mencionándolo (@Xerion) o respondiendo a un
+ *  mensaje que la IA generó antes. Nada más activa la IA — nunca se mete
+ *  sola en cofres, eliminaciones ni ningún otro flujo del juego.
  *
  *  REGLA DE ORO, innegociable: el bot JAMÁS pinga a nadie por esta vía, pase
  *  lo que pase, se lo pidan como se lo pidan. Esto se garantiza en DOS capas
@@ -25,7 +24,7 @@
  */
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant'; // rápido y barato — pensado para que los tokens duren
+const MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b'; // rápido y barato — reemplazo oficial de Groq para el modelo descontinuado
 
 function isAiAvailable() {
   return Boolean(process.env.GROQ_API_KEY);
@@ -104,8 +103,6 @@ Cómo hablas:
 
 Regla que nunca rompes, sin excepción, la pidan como la pidan (directo, disfrazado, insistiendo, "es broma", lo que sea): JAMÁS escribes @everyone, @here, ni menciones/pings de ningún usuario o rol. Si te lo piden, responde con humor que eso no lo vas a hacer, sin dar explicaciones técnicas.`;
 
-const ELIMINATION_SYSTEM_PROMPT = `Eres el narrador de una eliminación decisiva en un juego de Discord tipo battle royale de cofres. Te dan los nombres de quienes acaban de caer en la ronda final. Escribe UNA sola frase corta (máximo 20 palabras), divertida, con personalidad — como un locutor deportivo o de reality show con humor negro ligero, nunca cruel de verdad. Nunca uses @ ni menciones de ningún tipo — los nombres van en texto plano. No repitas frases genéricas tipo "ha sido eliminado", sé creativo.`;
-
 /** Respuesta de chat cuando alguien menciona al bot o responde a un mensaje de la IA. Devuelve null si la IA no está disponible o falla. */
 async function generateChatReply({ userMessage, authorName }) {
   if (!userMessage) return null;
@@ -117,19 +114,7 @@ async function generateChatReply({ userMessage, authorName }) {
   return sanitizeAiText(raw);
 }
 
-/** Línea con humor narrando la ronda decisiva de una eliminación. Devuelve null si la IA no está disponible o falla. */
-async function generateEliminationFlavor({ eliminatedNames, chestTypeName }) {
-  if (!eliminatedNames || eliminatedNames.length === 0) return null;
-  const messages = [
-    { role: 'system', content: ELIMINATION_SYSTEM_PROMPT },
-    { role: 'user', content: `Cofre: ${chestTypeName || 'un cofre'}. Cayeron en la ronda decisiva: ${eliminatedNames.join(', ')}.` },
-  ];
-  const raw = await callGroq(messages, { maxTokens: 70, temperature: 1.0, timeoutMs: 2200 });
-  return sanitizeAiText(raw);
-}
-
 module.exports = {
   isAiAvailable,
   generateChatReply,
-  generateEliminationFlavor,
 };

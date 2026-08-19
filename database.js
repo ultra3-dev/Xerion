@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.2 — database.js
+ *  XERION v1.9.0 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -279,7 +279,7 @@ async function applyRewardToUser(userId, reward) {
  * evita duplicados si el proceso cae entre el premio y el mensaje final.
  * La tabla es nueva y aditiva: nunca se borra ni se reinicia.
  */
-async function settleChestReward(chestId, userId, reward, channelId = null) {
+async function settleChestReward(chestId, userId, reward, channelId = null, heldRoleKeys = []) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -296,11 +296,12 @@ async function settleChestReward(chestId, userId, reward, channelId = null) {
       return false;
     }
 
-    // Beneficios de rol + logros: suben tus Feathers ganados.
-    // Se calcula antes de guardar el historial para que quede el monto real acreditado.
+    // Beneficios de rol (según lo que el usuario tenga AHORA en Discord, no
+    // historial) + logros: suben tus Feathers ganados. Se calcula antes de
+    // guardar el historial para que quede el monto real acreditado.
     if (reward.kind === 'currency') {
       const { rows: bonusRows } = await client.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
-      const multiplier = totalFeatherMultiplier(bonusRows[0] || {});
+      const multiplier = totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {});
       reward.amount = Math.round((reward.amount || 0) * multiplier); // el llamador reutiliza este objeto para el embed de resultado
     }
 
@@ -624,10 +625,10 @@ async function consumeLuckCharmIfAvailable(userId) {
  * - Si no (o es el primer claim de todos), la racha se reinicia a 1.
  * El cooldown de 24h para poder reclamar de nuevo no cambia.
  */
-async function claimDaily(userId, identity = {}) {
+async function claimDaily(userId, identity = {}, heldRoleKeys = []) {
   await ensureUser(userId, identity);
   const { rows: bonusRows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
-  const dailyReward = Math.round(25 * totalFeatherMultiplier(bonusRows[0] || {}));
+  const dailyReward = Math.round(25 * totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {}));
   const { rows } = await pool.query(
     `UPDATE xerion_users
      SET feathers = feathers + $2,
@@ -672,7 +673,7 @@ async function setStreakVisible(userId, visible) {
  * (no se acumulan periodos atrasados) — así el sistema sigue siendo justo
  * y difícil, sin premiar a quien se desconecta mucho tiempo.
  */
-async function collectRoleIncome(userId) {
+async function collectRoleIncome(userId, heldRoleKeys = []) {
   await ensureUser(userId);
   const { rows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
   const row = rows[0];
@@ -685,7 +686,7 @@ async function collectRoleIncome(userId) {
   let totalAmount = 0;
 
   for (const [key, cols] of Object.entries(ROLE_INCOME_COLUMNS)) {
-    if ((row[cols.count] || 0) <= 0) continue; // no tiene ese rol
+    if (!heldRoleKeys.includes(key)) continue; // ya no tiene el rol AHORA — sin ingreso, tenga o no historial
     const { intervalMs, amount } = ROLE_PASSIVE_INCOME[key];
     const lastAt = row[cols.at] ? new Date(row[cols.at]).getTime() : null;
     if (lastAt === null || now - lastAt >= intervalMs) {
@@ -710,7 +711,7 @@ async function collectRoleIncome(userId) {
     );
   }
 
-  return { claimed, pending, totalAmount, hasAnyRole: claimed.length + pending.length > 0 };
+  return { claimed, pending, totalAmount, hasAnyRole: heldRoleKeys.length > 0 };
 }
 
 /**

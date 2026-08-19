@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.2 — visuals.js
+ *  XERION v1.9.0 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -785,9 +785,9 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)
 const ROLE_LABELS = { ARISE: 'ARISE 💀', KING: 'KING 👑', GOAT: 'GOAT 🐐', AURA_INFINITE: 'AURA INFINITE 🌌', STAR_X: 'STAR X ⭐' };
 
 /** Línea que muestra el beneficio activo de rol (según el más raro que tenga el usuario). */
-function roleBenefitLine(stats) {
-  const key = highestRoleKey(stats);
-  const achievementPct = Math.round(achievementBonusMultiplier(stats) * 1000) / 10;
+function roleBenefitLine(stats, heldRoleKeys = []) {
+  const key = highestRoleKey(heldRoleKeys);
+  const achievementPct = Math.round(achievementBonusMultiplier(stats, heldRoleKeys) * 1000) / 10;
   const achievementPart = achievementPct > 0 ? ` **+${achievementPct}%** por logros` : '';
   if (!key) {
     return achievementPct > 0
@@ -807,7 +807,7 @@ function addTipFooter(container) {
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${tip}`));
 }
 
-function buildProfileContainer(stats, discordUser) {
+function buildProfileContainer(stats, discordUser, heldRoleKeys = []) {
   const winRate =
     stats.chests_participated > 0 ? ((stats.chests_won / stats.chests_participated) * 100).toFixed(1) : '0.0';
 
@@ -846,17 +846,21 @@ function buildProfileContainer(stats, discordUser) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `⭐ **STAR X:** ${formatNumber(stats.star_x_count)}`,
-          `🌌 **AURA INFINITE:** ${formatNumber(stats.aura_infinite_count)}`,
-          `🐐 **GOAT:** ${formatNumber(stats.goat_count)}`,
-          `👑 **KING:** ${formatNumber(stats.king_count)}`,
-          `💀 **ARISE:** ${formatNumber(stats.arise_count)}`,
+          `⭐ **STAR X:** ${formatNumber(stats.star_x_count)}${heldRoleKeys.includes('STAR_X') ? ' ✅' : ''}`,
+          `🌌 **AURA INFINITE:** ${formatNumber(stats.aura_infinite_count)}${heldRoleKeys.includes('AURA_INFINITE') ? ' ✅' : ''}`,
+          `🐐 **GOAT:** ${formatNumber(stats.goat_count)}${heldRoleKeys.includes('GOAT') ? ' ✅' : ''}`,
+          `👑 **KING:** ${formatNumber(stats.king_count)}${heldRoleKeys.includes('KING') ? ' ✅' : ''}`,
+          `💀 **ARISE:** ${formatNumber(stats.arise_count)}${heldRoleKeys.includes('ARISE') ? ' ✅' : ''}`,
         ].join('\n'),
       ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(roleBenefitLine(stats)),
+      new TextDisplayBuilder().setContent('-# ✅ = tenés el rol ahora mismo. Los números son cuántas veces lo ganaste en total.'),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(roleBenefitLine(stats, heldRoleKeys)),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
@@ -892,7 +896,7 @@ function buildQuickInventoryContainer(stats, discordUser) {
   return addTipFooter(container);
 }
 
-function buildLeaderboardContainer(rows, page = 0, totalPages = 1) {
+function buildLeaderboardContainer(rows, page = 0, totalPages = 1, ownerId = '') {
   const medals = ['🥇', '🥈', '🥉'];
   const lines = rows.length
     ? rows.map((row, i) => {
@@ -909,8 +913,8 @@ function buildLeaderboardContainer(rows, page = 0, totalPages = 1) {
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')))
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`xerion_leaderboard_prev_${page}`).setLabel('Anterior').setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
-        new ButtonBuilder().setCustomId(`xerion_leaderboard_next_${page}`).setLabel('Siguiente').setEmoji('▶️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages - 1),
+        new ButtonBuilder().setCustomId(`xerion_leaderboard_prev::${page}::${ownerId}`).setLabel('Anterior').setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
+        new ButtonBuilder().setCustomId(`xerion_leaderboard_next::${page}::${ownerId}`).setLabel('Siguiente').setEmoji('▶️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages - 1),
       ),
     );
 }
@@ -945,7 +949,7 @@ function buildRatesContainer() {
   return container;
 }
 
-function buildShopContainer(shopCounts) {
+function buildShopContainer(shopCounts, ownerId = '') {
   return new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.KING)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Tienda de Xerion\n-# Tu saldo: ${FEATHER_EMOJI} **${formatNumber(shopCounts.feathers)}** Feathers`))
@@ -983,17 +987,17 @@ function buildShopContainer(shopCounts) {
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('xerion_buy_shield')
+          .setCustomId(`xerion_buy_shield::${ownerId}`)
           .setLabel(`Escudo (${SHOP_ITEMS.SHIELD.cost})`)
           .setEmoji(SHOP_ITEMS.SHIELD.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
-          .setCustomId('xerion_buy_charm')
+          .setCustomId(`xerion_buy_charm::${ownerId}`)
           .setLabel(`Amuleto (${SHOP_ITEMS.CHARM.cost})`)
           .setEmoji(SHOP_ITEMS.CHARM.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
-          .setCustomId('xerion_buy_revive')
+          .setCustomId(`xerion_buy_revive::${ownerId}`)
           .setLabel(`Pluma Fénix (${SHOP_ITEMS.REVIVE.cost})`)
           .setEmoji(SHOP_ITEMS.REVIVE.emoji)
           .setStyle(ButtonStyle.Secondary),
@@ -1001,7 +1005,7 @@ function buildShopContainer(shopCounts) {
     );
 }
 
-function buildNotificationContainer(enabled) {
+function buildNotificationContainer(enabled, ownerId = '') {
   return new ContainerBuilder()
     .setAccentColor(enabled ? CONFIG.COLORS.KING : CONFIG.COLORS.NOTHING)
     .addTextDisplayComponents(
@@ -1018,7 +1022,7 @@ function buildNotificationContainer(enabled) {
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('xerion_notif_toggle')
+          .setCustomId(`xerion_notif_toggle::${ownerId}`)
           .setLabel(enabled ? 'Desactivar' : 'Activar')
           .setEmoji(enabled ? '🔕' : '🔔')
           .setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success),
@@ -1165,10 +1169,10 @@ function buildHistoryContainer(rows) {
   return buildSimpleContainer('Historial', 'Tus últimas recompensas', lines, CONFIG.COLORS.BRAND);
 }
 
-function buildAchievementsContainer(stats) {
-  const completed = countCompletedAchievements(stats);
-  const bonusPct = Math.round(achievementBonusMultiplier(stats) * 1000) / 10; // 1 decimal
-  const lines = ACHIEVEMENTS.map((a) => `${a.check(stats) ? '✅' : '⬜'} **${a.name}** — ${a.description}`);
+function buildAchievementsContainer(stats, heldRoleKeys = []) {
+  const completed = countCompletedAchievements(stats, heldRoleKeys);
+  const bonusPct = Math.round(achievementBonusMultiplier(stats, heldRoleKeys) * 1000) / 10; // 1 decimal
+  const lines = ACHIEVEMENTS.map((a) => `${a.check(stats, heldRoleKeys) ? '✅' : '⬜'} **${a.name}** — ${a.description}`);
   lines.push(
     '',
     `🎖️ **${completed}/${ACHIEVEMENTS.length} logros** — +${bonusPct}% Feathers extra por logros desbloqueados`,
@@ -1250,7 +1254,7 @@ function buildRoleIncomeContainer(result) {
   return buildSimpleContainer('Ingreso de Roles', 'Recolecta el ingreso pasivo de tus roles', lines, CONFIG.COLORS.FEATHERS);
 }
 
-function buildStreakContainer(stats) {
+function buildStreakContainer(stats, ownerId = '') {
   const visible = stats.streak_visible !== false;
   const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.FEATHERS)
@@ -1284,7 +1288,7 @@ function buildStreakContainer(stats) {
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('xerion_streak_toggle')
+          .setCustomId(`xerion_streak_toggle::${ownerId}`)
           .setLabel(visible ? 'Ocultar de mi apodo' : 'Mostrar en mi apodo')
           .setEmoji(visible ? '🙈' : '🔥')
           .setStyle(visible ? ButtonStyle.Secondary : ButtonStyle.Success),

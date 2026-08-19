@@ -1,3 +1,25 @@
+# Xerion v1.9.0 — Qué cambió
+
+## 🔴 Arreglo urgente: beneficios de rol sin tener el rol
+
+- Se detectó que alguien pudo reclamar el ingreso pasivo de KING (`/claim`) **sin tener el rol** — el sistema comparaba contra el historial de la base de datos (cuántas veces lo ganó alguna vez) en vez de contra los roles reales de Discord.
+- Reescrito de raíz: el bonus de Feathers por rol, el ingreso pasivo de `/claim`, y los logros de "tené tal rol" ahora dependen 100% de qué roles tenés **en Discord en este momento**. Si te quitan un rol, perdés todo lo relacionado con él al instante — el historial (cuántas veces lo ganaste) se conserva solo como estadística, ya no da ningún beneficio por sí solo.
+- `/profile` ahora muestra un ✅ al lado de cada rol que tenés activo ahora mismo, para que quede claro qué te está dando beneficio y qué es solo historial.
+
+## Groq: modelo muerto arreglado
+
+- `llama-3.1-8b-instant` fue descontinuado por Groq el 16 de agosto — se cambió al reemplazo oficial recomendado, `openai/gpt-oss-20b` (más rápido y más barato todavía).
+
+## La IA ya no narra eliminaciones sola
+
+- Se sacó por completo la narración automática de eliminaciones con IA. Ahora la IA **solo** se activa si mencionás a `@Xerion` directamente o respondés a uno de sus propios mensajes — nunca se mete sola en ningún otro flujo del juego.
+
+## Bugs de seguridad: botones usables por cualquiera
+
+- `/leaderboard`, `/shop`, `/notification` y `/streak` (y sus versiones `xn`) tenían botones que cualquiera podía tocar, no solo quien pidió el panel — alguien más podía pasar de página tu leaderboard, o pisar tu panel de tienda con el suyo. Ahora cada panel queda bloqueado a quien lo pidió; si otra persona lo toca, le sale un aviso pidiéndole que use el comando por su cuenta.
+
+---
+
 # Xerion v1.8.2 — Qué cambió
 
 ## Arreglo: el bot podía quedarse trabado conectando a Discord, en silencio

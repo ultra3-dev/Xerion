@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.2 — config.js
+ *  XERION v1.9.0 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.8.2',
+  VERSION: '1.9.0',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -321,6 +321,13 @@ function isOnCooldown(key, ms) {
 // BENEFICIOS DE ROL — entre más raro el rol que tienes, mejor el beneficio.
 // Se aplica como un bonus permanente al ganar Feathers (cofre o daily),
 // usando SOLO el rol más raro que tengas (no se acumulan varios a la vez).
+//
+// IMPORTANTE: todo acá se calcula con `heldRoleKeys` — la lista de roles que
+// el usuario tiene EN DISCORD en este momento (la arma game.js leyendo
+// member.roles.cache, siempre fresco, nunca desde la base de datos). Si le
+// quitan un rol, pierde el beneficio al instante — los contadores de la
+// base de datos (arise_count, etc.) son solo historial de cuántas veces lo
+// ganó, y ya no determinan ningún beneficio por sí solos.
 // ============================================================================
 
 const ROLE_FEATHER_BONUS = {
@@ -331,24 +338,17 @@ const ROLE_FEATHER_BONUS = {
   STAR_X: 0.02,
 };
 
-/** Recibe el objeto de conteos de rol de un usuario (aura_infinite_count, etc.) y devuelve su multiplicador de Feathers. */
-function featherBonusMultiplier(counts = {}) {
-  if (counts.arise_count > 0) return 1 + ROLE_FEATHER_BONUS.ARISE;
-  if (counts.king_count > 0) return 1 + ROLE_FEATHER_BONUS.KING;
-  if (counts.goat_count > 0) return 1 + ROLE_FEATHER_BONUS.GOAT;
-  if (counts.aura_infinite_count > 0) return 1 + ROLE_FEATHER_BONUS.AURA_INFINITE;
-  if (counts.star_x_count > 0) return 1 + ROLE_FEATHER_BONUS.STAR_X;
-  return 1;
+const ROLE_RARITY_ORDER = ['ARISE', 'KING', 'GOAT', 'AURA_INFINITE', 'STAR_X']; // de más raro a más común
+
+/** Recibe la lista de roles que el usuario tiene AHORA (ej. ['KING','STAR_X']) y devuelve su multiplicador de Feathers. */
+function featherBonusMultiplier(heldRoleKeys = []) {
+  const held = highestRoleKey(heldRoleKeys);
+  return held ? 1 + ROLE_FEATHER_BONUS[held] : 1;
 }
 
-/** Nombre del rol más raro que tiene el usuario (o null si no tiene ninguno), para mostrar en paneles. */
-function highestRoleKey(counts = {}) {
-  if (counts.arise_count > 0) return 'ARISE';
-  if (counts.king_count > 0) return 'KING';
-  if (counts.goat_count > 0) return 'GOAT';
-  if (counts.aura_infinite_count > 0) return 'AURA_INFINITE';
-  if (counts.star_x_count > 0) return 'STAR_X';
-  return null;
+/** El más raro de los roles que el usuario tiene AHORA (o null si no tiene ninguno de los 5), para mostrar en paneles. */
+function highestRoleKey(heldRoleKeys = []) {
+  return ROLE_RARITY_ORDER.find((key) => heldRoleKeys.includes(key)) || null;
 }
 
 // ============================================================================
@@ -357,6 +357,10 @@ function highestRoleKey(counts = {}) {
 // desalinean). Más difíciles que antes, y cada uno desbloqueado suma un
 // bonus pequeño y permanente — no cambia mucho por sí solo, pero se nota
 // si vas completando varios.
+//
+// Los logros de "obtén tal rol" también dependen de tenerlo AHORA (mismo
+// criterio que los beneficios) — si te lo quitan, ese logro se marca como
+// no completado hasta que lo vuelvas a tener.
 // ============================================================================
 
 const ACHIEVEMENTS = [
@@ -366,16 +370,16 @@ const ACHIEVEMENTS = [
   { key: 'veteran', name: 'Veterano de Xerion', description: 'Gana 75 cofres.', check: (s) => (s.chests_won || 0) >= 75 },
   { key: 'steel_feathers', name: 'Plumaje de acero', description: 'Consigue 1,000 Feathers en total.', check: (s) => (s.total_feathers_earned || 0) >= 1000 },
   { key: 'feather_fortune', name: 'Fortuna emplumada', description: 'Consigue 10,000 Feathers en total.', check: (s) => (s.total_feathers_earned || 0) >= 10000 },
-  { key: 'first_star', name: 'Primera estrella', description: 'Obtén STAR X.', check: (s) => (s.star_x_count || 0) >= 1 },
-  { key: 'aura_awakened', name: 'Aura despertada', description: 'Obtén AURA INFINITE.', check: (s) => (s.aura_infinite_count || 0) >= 1 },
-  { key: 'crown', name: 'Corona de Xerion', description: 'Obtén KING.', check: (s) => (s.king_count || 0) >= 1 },
-  { key: 'supreme_goat', name: 'Cabra suprema', description: 'Obtén GOAT.', check: (s) => (s.goat_count || 0) >= 1 },
-  { key: 'the_one_who_returns', name: 'El que regresa', description: 'Obtén ARISE.', check: (s) => (s.arise_count || 0) >= 1 },
+  { key: 'first_star', name: 'Primera estrella', description: 'Ten el rol STAR X.', check: (s, held = []) => held.includes('STAR_X') },
+  { key: 'aura_awakened', name: 'Aura despertada', description: 'Ten el rol AURA INFINITE.', check: (s, held = []) => held.includes('AURA_INFINITE') },
+  { key: 'crown', name: 'Corona de Xerion', description: 'Ten el rol KING.', check: (s, held = []) => held.includes('KING') },
+  { key: 'supreme_goat', name: 'Cabra suprema', description: 'Ten el rol GOAT.', check: (s, held = []) => held.includes('GOAT') },
+  { key: 'the_one_who_returns', name: 'El que regresa', description: 'Ten el rol ARISE.', check: (s, held = []) => held.includes('ARISE') },
   {
     key: 'collector',
     name: 'Coleccionista',
     description: 'Ten los 5 roles de cofre a la vez.',
-    check: (s) => [s.star_x_count, s.aura_infinite_count, s.goat_count, s.king_count, s.arise_count].every((c) => (c || 0) >= 1),
+    check: (s, held = []) => ROLE_RARITY_ORDER.every((k) => held.includes(k)),
   },
   { key: 'streak_week', name: 'Constancia de hierro', description: 'Llega a una racha de 7 días en /daily.', check: (s) => (s.best_streak || 0) >= 7 },
   { key: 'streak_month', name: 'Disciplina absoluta', description: 'Llega a una racha de 30 días en /daily.', check: (s) => (s.best_streak || 0) >= 30 },
@@ -384,21 +388,26 @@ const ACHIEVEMENTS = [
 const ACHIEVEMENT_BONUS_PER_UNLOCK = 0.005; // +0.5% Feathers por logro desbloqueado
 const ACHIEVEMENT_BONUS_CAP = 0.05; // tope de +5% (10 logros de 14)
 
-function countCompletedAchievements(stats = {}) {
-  return ACHIEVEMENTS.reduce((n, a) => n + (a.check(stats) ? 1 : 0), 0);
+function countCompletedAchievements(stats = {}, heldRoleKeys = []) {
+  return ACHIEVEMENTS.reduce((n, a) => n + (a.check(stats, heldRoleKeys) ? 1 : 0), 0);
 }
 
 /** Extra a SUMAR sobre featherBonusMultiplier (no incluye el 1.0 base). */
-function achievementBonusMultiplier(stats = {}) {
-  return Math.min(countCompletedAchievements(stats) * ACHIEVEMENT_BONUS_PER_UNLOCK, ACHIEVEMENT_BONUS_CAP);
+function achievementBonusMultiplier(stats = {}, heldRoleKeys = []) {
+  return Math.min(countCompletedAchievements(stats, heldRoleKeys) * ACHIEVEMENT_BONUS_PER_UNLOCK, ACHIEVEMENT_BONUS_CAP);
 }
 
-/** Multiplicador total de Feathers: bonus de rol + bonus de logros, ya combinados. */
-function totalFeatherMultiplier(stats = {}) {
-  return featherBonusMultiplier(stats) + achievementBonusMultiplier(stats);
+/** Multiplicador total de Feathers: bonus de rol (según lo que tengas AHORA) + bonus de logros, ya combinados. */
+function totalFeatherMultiplier(heldRoleKeys = [], stats = {}) {
+  return featherBonusMultiplier(heldRoleKeys) + achievementBonusMultiplier(stats, heldRoleKeys);
 }
-// tiempo (mínimo 3h). Entre más raro el rol, más Feathers da Y más tiempo
-// hay que esperar entre cobro y cobro. Se reclama todo junto con /claim.
+
+// ============================================================================
+// INGRESO PASIVO POR ROL — cada rol que tengas AHORA te da Feathers cada
+// cierto tiempo (mínimo 3h). Entre más raro el rol, más Feathers da Y más
+// tiempo hay que esperar entre cobro y cobro. Se reclama todo junto con
+// /claim — y si en algún momento pierdes el rol, deja de generar ingreso
+// (aunque conservás lo que ya hayas cobrado, claro).
 // ============================================================================
 
 const ROLE_PASSIVE_INCOME = {

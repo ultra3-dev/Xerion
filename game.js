@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.8.2 — game.js
+ *  XERION v1.9.0 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -160,26 +160,6 @@ function formatEliminationLine(eliminatedIds) {
 function decideBatchSize(remainingCount) {
   if (remainingCount <= CONFIG.BATCH_THRESHOLD) return 1;
   return Math.max(2, Math.floor(remainingCount * CONFIG.BATCH_FRACTION));
-}
-
-/**
- * Pide a la IA un resumen con humor de la ronda decisiva y lo publica como
- * un mensaje aparte, sin pings (los pings reales ya los mandó la línea de
- * eliminación normal). Completamente best-effort: si la IA no responde a
- * tiempo o falla, simplemente no se manda nada — el juego ya siguió su curso.
- */
-async function generateAndSendEliminationFlavor(channel, eliminatedIds, chestTypeName) {
-  const names = await Promise.all(
-    eliminatedIds.map(async (id) => {
-      const member = await channel.guild.members.fetch(id).catch(() => null);
-      if (member) return member.displayName;
-      const user = await channel.client.users.fetch(id).catch(() => null);
-      return user?.username || 'un jugador';
-    }),
-  );
-  const flavor = await ai.generateEliminationFlavor({ eliminatedNames: names, chestTypeName });
-  if (!flavor) return;
-  await channel.send({ content: `🎙️ ${flavor}`, allowedMentions: SAFE_MENTIONS }).catch(() => {});
 }
 
 // ============================================================================
@@ -475,14 +455,6 @@ async function runBattleRoyale(channel, state, participantIds, resumed = false) 
       await channel.send({ content: line, allowedMentions: pingOnly(eliminated) }).catch((err) =>
         console.error('[Xerion] Error enviando eliminación:', err),
       );
-
-      // Resumen con humor de la IA — solo en la ronda decisiva (cuida tokens)
-      // y nunca bloquea el ritmo del juego: se dispara sin esperar su respuesta.
-      if (remaining.length === 1 && ai.isAiAvailable()) {
-        generateAndSendEliminationFlavor(channel, eliminated, state.chestType.name).catch((err) =>
-          console.error('[Xerion] Error generando el resumen de la IA:', err),
-        );
-      }
     } else if (round === 1 && shieldedThisRound.size > 0) {
       await channel
         .send({ content: `🛡️ **Todos los Escudos de Xerion protegieron a sus dueños en esta ronda — nadie cae... por ahora.**`, allowedMentions: SAFE_MENTIONS })
@@ -735,7 +707,9 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
   }
 
   try {
-    await db.settleChestReward(state?.messageId || `legacy:${winnerId}`, winnerId, reward, channel.id);
+    const winnerMember = await channel.guild.members.fetch(winnerId).catch(() => null);
+    const heldRoleKeys = getHeldRoleKeys(winnerMember);
+    await db.settleChestReward(state?.messageId || `legacy:${winnerId}`, winnerId, reward, channel.id, heldRoleKeys);
   } catch (err) {
     // Mantener el snapshot en `opening` permite reintentar en la próxima
     // conexión sin perder la recompensa ni sumarla dos veces.
@@ -794,6 +768,11 @@ async function handleOpenChest(interaction) {
 // ============================================================================
 
 async function handleShopBuy(interaction, itemKey) {
+  const ownerId = interaction.customId.split('::')[1];
+  if (ownerId && interaction.user.id !== ownerId) {
+    return interaction.reply({ content: 'Esta es la tienda de otra persona — usá `/shop` para abrir la tuya.', flags: MessageFlags.Ephemeral });
+  }
+
   const item = SHOP_ITEMS[itemKey];
   const buyFn = itemKey === 'SHIELD' ? db.buyShield : itemKey === 'CHARM' ? db.buyCharm : db.buyRevive;
 
@@ -812,15 +791,19 @@ async function handleShopBuy(interaction, itemKey) {
     });
   }
 
-  await interaction.update({ components: [visuals.buildShopContainer(result)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  await interaction.update({ components: [visuals.buildShopContainer(result, ownerId)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   await interaction.followUp({ content: `✅ Compraste ${item.emoji} **${item.name}**.`, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
 async function handleNotifToggle(interaction) {
+  const ownerId = interaction.customId.split('::')[1];
+  if (ownerId && interaction.user.id !== ownerId) {
+    return interaction.reply({ content: 'Este panel de notificaciones es de otra persona — usá `/notification` para el tuyo.', flags: MessageFlags.Ephemeral });
+  }
   try {
     const current = await db.getNotificationEnabled(interaction.user.id);
     const next = await db.setNotificationEnabled(interaction.user.id, !current);
-    await interaction.update({ components: [visuals.buildNotificationContainer(next)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    await interaction.update({ components: [visuals.buildNotificationContainer(next, ownerId)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error actualizando la preferencia de notificación:', err);
     await interaction.reply({ content: 'Something went wrong — try again in a moment.', flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -828,6 +811,10 @@ async function handleNotifToggle(interaction) {
 }
 
 async function handleStreakToggle(interaction) {
+  const ownerId = interaction.customId.split('::')[1];
+  if (ownerId && interaction.user.id !== ownerId) {
+    return interaction.reply({ content: 'Esta racha es de otra persona — usá `/streak` para la tuya.', flags: MessageFlags.Ephemeral });
+  }
   try {
     const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
     const nextVisible = stats.streak_visible === false;
@@ -840,7 +827,7 @@ async function handleStreakToggle(interaction) {
     }
 
     const updated = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-    await interaction.update({ components: [visuals.buildStreakContainer(updated)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    await interaction.update({ components: [visuals.buildStreakContainer(updated, ownerId)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error actualizando visibilidad de racha:', err);
     await interaction.reply({ content: 'Something went wrong — try again in a moment.', flags: MessageFlags.Ephemeral }).catch(() => {});
@@ -1007,7 +994,8 @@ async function cmdProfile(interaction) {
   await interaction.deferReply();
   try {
     const stats = await db.getUserStats(target.id, { username: target.username, displayName: target.displayName });
-    await interaction.editReply({ components: [visuals.buildProfileContainer(stats, target)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    const targetMember = target.id === interaction.user.id ? interaction.member : await interaction.guild.members.fetch(target.id).catch(() => null);
+    await interaction.editReply({ components: [visuals.buildProfileContainer(stats, target, getHeldRoleKeys(targetMember))], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /profile:', err);
     await interaction.editReply('Could not load that profile right now — try again in a moment.');
@@ -1031,7 +1019,7 @@ async function cmdLeaderboard(interaction) {
     const rows = await hydrateLeaderboardRows(interaction.guild, await db.getLeaderboard(100));
     const totalPages = Math.max(1, Math.ceil(rows.length / 10));
     await interaction.editReply({
-      components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages)],
+      components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages, interaction.user.id)],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: SAFE_MENTIONS,
     });
@@ -1049,7 +1037,7 @@ async function cmdShop(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const counts = await db.getShopCounts(interaction.user.id);
-    await interaction.editReply({ components: [visuals.buildShopContainer(counts)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
+    await interaction.editReply({ components: [visuals.buildShopContainer(counts, interaction.user.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /shop:', err);
     await interaction.editReply('Could not load the shop right now — try again in a moment.');
@@ -1060,7 +1048,7 @@ async function cmdNotification(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const enabled = await db.getNotificationEnabled(interaction.user.id);
-    await interaction.editReply({ components: [visuals.buildNotificationContainer(enabled)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
+    await interaction.editReply({ components: [visuals.buildNotificationContainer(enabled, interaction.user.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /notification:', err);
     await interaction.editReply('Could not load your notification settings right now — try again in a moment.');
@@ -1084,6 +1072,25 @@ async function cmdHelp(interaction) {
 
 function identityFor(user) {
   return { username: user.username, displayName: user.displayName || user.globalName || user.username };
+}
+
+/**
+ * Lista de roles de cofre (ARISE/KING/GOAT/AURA_INFINITE/STAR_X) que el
+ * usuario tiene AHORA MISMO en Discord. Esta es la ÚNICA fuente de verdad
+ * para beneficios de rol, ingreso pasivo y logros de rol — nunca los
+ * contadores de la base de datos, que son solo historial. Si no hay
+ * `member` (ej. no se pudo resolver), devuelve vacío por seguridad — mejor
+ * negar un beneficio por error que otorgarlo sin verificar.
+ */
+function getHeldRoleKeys(member) {
+  if (!member?.roles?.cache) return [];
+  const keys = [];
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.ARISE)) keys.push('ARISE');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.KING)) keys.push('KING');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.GOAT)) keys.push('GOAT');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.AURA_INFINITE)) keys.push('AURA_INFINITE');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.STAR_X)) keys.push('STAR_X');
+  return keys;
 }
 
 const STREAK_SUFFIX_RE = /\s*\(🔥\d+\)\s*$/;
@@ -1161,7 +1168,7 @@ async function cmdChest(interaction) {
 }
 
 async function cmdDaily(interaction) {
-  const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user));
+  const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user), getHeldRoleKeys(interaction.member));
   if (result.claimed && result.streak_visible !== false) {
     updateStreakNickname(interaction.member, result.current_streak).catch(() => {});
   }
@@ -1169,7 +1176,7 @@ async function cmdDaily(interaction) {
 }
 
 async function cmdClaim(interaction) {
-  const result = await db.collectRoleIncome(interaction.user.id);
+  const result = await db.collectRoleIncome(interaction.user.id, getHeldRoleKeys(interaction.member));
   return sendV2(interaction, visuals.buildRoleIncomeContainer(result), false);
 }
 
@@ -1180,7 +1187,7 @@ async function cmdHistory(interaction) {
 
 async function cmdAchievements(interaction) {
   const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-  return sendV2(interaction, visuals.buildAchievementsContainer(stats));
+  return sendV2(interaction, visuals.buildAchievementsContainer(stats, getHeldRoleKeys(interaction.member)));
 }
 
 async function cmdRank(interaction) {
@@ -1194,7 +1201,7 @@ async function cmdRewards(interaction) {
 
 async function cmdStreak(interaction) {
   const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-  return sendV2(interaction, visuals.buildStreakContainer(stats));
+  return sendV2(interaction, visuals.buildStreakContainer(stats, interaction.user.id));
 }
 
 async function cmdPing(interaction) {
@@ -1271,7 +1278,8 @@ async function prefixSpawn(message, args) {
 async function prefixProfile(message) {
   const target = message.mentions.users.first() || message.author;
   const stats = await db.getUserStats(target.id);
-  return noPingReply(message, { components: [visuals.buildProfileContainer(stats, target)], flags: MessageFlags.IsComponentsV2 });
+  const targetMember = target.id === message.author.id ? message.member : await message.guild.members.fetch(target.id).catch(() => null);
+  return noPingReply(message, { components: [visuals.buildProfileContainer(stats, target, getHeldRoleKeys(targetMember))], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixInventory(message) {
@@ -1283,7 +1291,7 @@ async function prefixLeaderboard(message) {
   const rows = await hydrateLeaderboardRows(message.guild, await db.getLeaderboard(100));
   const totalPages = Math.max(1, Math.ceil(rows.length / 10));
   return noPingReply(message, {
-    components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages)],
+    components: [visuals.buildLeaderboardContainer(rows.slice(0, 10), 0, totalPages, message.author.id)],
     flags: MessageFlags.IsComponentsV2,
   });
 }
@@ -1294,12 +1302,12 @@ async function prefixRates(message) {
 
 async function prefixShop(message) {
   const counts = await db.getShopCounts(message.author.id);
-  return noPingReply(message, { components: [visuals.buildShopContainer(counts)], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildShopContainer(counts, message.author.id)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixNotification(message) {
   const enabled = await db.getNotificationEnabled(message.author.id);
-  const payload = { components: [visuals.buildNotificationContainer(enabled)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS };
+  const payload = { components: [visuals.buildNotificationContainer(enabled, message.author.id)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS };
   try {
     await message.author.send(payload);
     return noPingReply(message, { content: '📬 Te envié tu panel de notificaciones por DM.' });
@@ -1327,7 +1335,7 @@ async function prefixChest(message) {
 }
 
 async function prefixDaily(message) {
-  const result = await db.claimDaily(message.author.id, identityFor(message.author));
+  const result = await db.claimDaily(message.author.id, identityFor(message.author), getHeldRoleKeys(message.member));
   if (result.claimed && result.streak_visible !== false) {
     updateStreakNickname(message.member, result.current_streak).catch(() => {});
   }
@@ -1335,7 +1343,7 @@ async function prefixDaily(message) {
 }
 
 async function prefixClaim(message) {
-  const result = await db.collectRoleIncome(message.author.id);
+  const result = await db.collectRoleIncome(message.author.id, getHeldRoleKeys(message.member));
   return noPingReply(message, { components: [visuals.buildRoleIncomeContainer(result)], flags: MessageFlags.IsComponentsV2 });
 }
 
@@ -1346,7 +1354,7 @@ async function prefixHistory(message) {
 
 async function prefixAchievements(message) {
   const stats = await db.getUserStats(message.author.id, identityFor(message.author));
-  return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats, getHeldRoleKeys(message.member))], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixRank(message) {
@@ -1360,7 +1368,7 @@ async function prefixRewards(message) {
 
 async function prefixStreak(message) {
   const stats = await db.getUserStats(message.author.id, identityFor(message.author));
-  return noPingReply(message, { components: [visuals.buildStreakContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildStreakContainer(stats, message.author.id)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixPing(message) {
@@ -1490,19 +1498,23 @@ async function handleInteraction(interaction) {
       const id = interaction.customId;
       if (id.startsWith('xerion_participate')) return await handleParticipate(interaction);
       if (id.startsWith('xerion_open::')) return await handleOpenChest(interaction);
-      if (id === 'xerion_buy_shield') return await handleShopBuy(interaction, 'SHIELD');
-      if (id === 'xerion_buy_charm') return await handleShopBuy(interaction, 'CHARM');
-      if (id === 'xerion_buy_revive') return await handleShopBuy(interaction, 'REVIVE');
-      if (id === 'xerion_notif_toggle') return await handleNotifToggle(interaction);
-      if (id === 'xerion_streak_toggle') return await handleStreakToggle(interaction);
-      if (id.startsWith('xerion_leaderboard_prev_') || id.startsWith('xerion_leaderboard_next_')) {
-        const currentPage = Number(id.split('_').pop()) || 0;
-        const nextPage = id.includes('_prev_') ? currentPage - 1 : currentPage + 1;
+      if (id.startsWith('xerion_buy_shield::')) return await handleShopBuy(interaction, 'SHIELD');
+      if (id.startsWith('xerion_buy_charm::')) return await handleShopBuy(interaction, 'CHARM');
+      if (id.startsWith('xerion_buy_revive::')) return await handleShopBuy(interaction, 'REVIVE');
+      if (id.startsWith('xerion_notif_toggle::')) return await handleNotifToggle(interaction);
+      if (id.startsWith('xerion_streak_toggle::')) return await handleStreakToggle(interaction);
+      if (id.startsWith('xerion_leaderboard_prev::') || id.startsWith('xerion_leaderboard_next::')) {
+        const [, pageStr, ownerId] = id.split('::');
+        if (ownerId && interaction.user.id !== ownerId) {
+          return interaction.reply({ content: 'Solo quien pidió el leaderboard puede pasar de página — usá `/leaderboard` para el tuyo.', flags: MessageFlags.Ephemeral });
+        }
+        const currentPage = Number(pageStr) || 0;
+        const nextPage = id.startsWith('xerion_leaderboard_prev::') ? currentPage - 1 : currentPage + 1;
         const rows = await hydrateLeaderboardRows(interaction.guild, await db.getLeaderboard(100));
         const totalPages = Math.max(1, Math.ceil(rows.length / 10));
         const safePage = Math.max(0, Math.min(nextPage, totalPages - 1));
         return interaction.update({
-          components: [visuals.buildLeaderboardContainer(rows.slice(safePage * 10, safePage * 10 + 10), safePage, totalPages)],
+          components: [visuals.buildLeaderboardContainer(rows.slice(safePage * 10, safePage * 10 + 10), safePage, totalPages, ownerId)],
           flags: MessageFlags.IsComponentsV2,
           allowedMentions: SAFE_MENTIONS,
         });
