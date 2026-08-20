@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.0 — config.js
+ *  XERION v1.9.1 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.9.0',
+  VERSION: '1.9.1',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -215,6 +215,20 @@ const SHOP_ITEMS = {
     cost: 400,
     description: 'Objeto mítico: si te eliminan en una batalla, revives una única vez y sigues en juego hasta la siguiente ronda. Se consume al usarse, funcione o no.',
   },
+  WARD: {
+    key: 'WARD',
+    name: 'Amuleto contra el Vacío',
+    emoji: '🔮',
+    cost: 450,
+    description: 'Objeto mítico: garantiza que tu próximo cofre **no** te dé "Nothing" — vas a sacar algo sí o sí (rol o Feathers). Se consume al usarse.',
+  },
+  TIME_SKIP: {
+    key: 'TIME_SKIP',
+    name: 'Acelerador Temporal',
+    emoji: '⏩',
+    cost: 320,
+    description: 'Objeto raro: la próxima vez que uses `/claim`, completa al instante TODO el ingreso pasivo de rol que tengas pendiente, sin esperar el tiempo restante. Se consume al usarse.',
+  },
 };
 
 // ============================================================================
@@ -261,6 +275,22 @@ function applyLuckBoost(table) {
   const nothing = boosted.find((r) => r.key === 'NOTHING');
   if (nothing) nothing.chance = Math.max(0, nothing.chance - delta);
   return boosted;
+}
+
+/** Garantiza que la tirada no caiga en "Nothing" — reparte su probabilidad proporcionalmente entre todo lo demás. */
+function applyVoidWard(table) {
+  const warded = table.map((r) => ({ ...r }));
+  const nothing = warded.find((r) => r.key === 'NOTHING');
+  if (!nothing || nothing.chance <= 0) return warded;
+  const freedChance = nothing.chance;
+  nothing.chance = 0;
+  const others = warded.filter((r) => r.key !== 'NOTHING');
+  const othersTotal = others.reduce((sum, r) => sum + r.chance, 0);
+  if (othersTotal <= 0) return warded;
+  for (const r of others) {
+    r.chance += freedChance * (r.chance / othersTotal);
+  }
+  return warded;
 }
 
 function randomBetween(min, max) {
@@ -466,6 +496,7 @@ module.exports = {
   messagesUntilNextIncrease,
   rollReward,
   applyLuckBoost,
+  applyVoidWard,
   rollFeatherAmount,
   formatFeatherRange,
   sleep,

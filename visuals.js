@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.0 — visuals.js
+ *  XERION v1.9.1 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -752,7 +752,7 @@ const RESULT_FLAVOR = {
   NOTHING: 'El cofre estaba vacío para ti esta vez. Así de cruel es Xerion.',
 };
 
-function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted) {
+function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted, wardUsed) {
   const resultLine =
     reward.kind === 'role'
       ? `${reward.emoji} **${reward.label}**`
@@ -764,6 +764,10 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)
 
   if (luckBoosted) {
     lines.push('', '🍀 **Amuleto consumido:** tus probabilidades de rol fueron un 50% más altas en esta tirada.');
+  }
+
+  if (wardUsed) {
+    lines.push('', `${SHOP_ITEMS.WARD.emoji} **${SHOP_ITEMS.WARD.name} consumido:** tenías garantizado no sacar "Nothing" en esta tirada.`);
   }
 
   if (reward.kind === 'role' && !roleGranted) {
@@ -984,6 +988,26 @@ function buildShopContainer(shopCounts, ownerId = '') {
       ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `### ${SHOP_ITEMS.WARD.emoji} ${SHOP_ITEMS.WARD.name} — \`${SHOP_ITEMS.WARD.cost}\` ${FEATHER_EMOJI}`,
+          `> ${SHOP_ITEMS.WARD.description}`,
+          `-# Tienes: **${shopCounts.void_wards}**`,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `### ${SHOP_ITEMS.TIME_SKIP.emoji} ${SHOP_ITEMS.TIME_SKIP.name} — \`${SHOP_ITEMS.TIME_SKIP.cost}\` ${FEATHER_EMOJI}`,
+          `> ${SHOP_ITEMS.TIME_SKIP.description}`,
+          `-# Tienes: **${shopCounts.time_skips}**`,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1000,6 +1024,16 @@ function buildShopContainer(shopCounts, ownerId = '') {
           .setCustomId(`xerion_buy_revive::${ownerId}`)
           .setLabel(`Pluma Fénix (${SHOP_ITEMS.REVIVE.cost})`)
           .setEmoji(SHOP_ITEMS.REVIVE.emoji)
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`xerion_buy_ward::${ownerId}`)
+          .setLabel(`Vacío (${SHOP_ITEMS.WARD.cost})`)
+          .setEmoji(SHOP_ITEMS.WARD.emoji)
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`xerion_buy_timeskip::${ownerId}`)
+          .setLabel(`Acelerador (${SHOP_ITEMS.TIME_SKIP.cost})`)
+          .setEmoji(SHOP_ITEMS.TIME_SKIP.emoji)
           .setStyle(ButtonStyle.Secondary),
       ),
     );
@@ -1235,6 +1269,9 @@ function buildRoleIncomeContainer(result) {
   }
 
   const lines = [];
+  if (result.usedTimeSkip) {
+    lines.push(`${SHOP_ITEMS.TIME_SKIP.emoji} **Usaste un ${SHOP_ITEMS.TIME_SKIP.name}** — todo tu ingreso pendiente se completó al instante.`, '');
+  }
   if (result.claimed.length > 0) {
     lines.push(`✅ **Recolectaste ${FEATHER_EMOJI} +${formatNumber(result.totalAmount)} Feathers:**`);
     for (const c of result.claimed) {

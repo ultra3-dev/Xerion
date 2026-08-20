@@ -1,3 +1,18 @@
+# Xerion v1.9.1 — Qué cambió
+
+## Arreglo: errores de "Unknown interaction" tras reconectar
+
+- Después de la 1.9.0 aparecieron varios `DiscordAPIError[10062]: Unknown interaction` en los logs. Investigado a fondo: no era un bug nuevo — Discord solo da 3 segundos para responder a un botón o comando, y ese error salió porque, tras la inestabilidad que tuvimos antes (el bot desconectándose y reconectando varias veces), quedó un backlog de clics y comandos viejos que Discord entregó de golpe al reconectar — todos ya vencidos, sin ninguna forma de responderlos.
+- Se confirmó que ningún cambio reciente introduce este riesgo: en los dos lugares donde se agregó una consulta extra a Discord (`/profile` y la apertura de cofre), el bot ya reconoce la interacción antes de hacer esa consulta, así que siempre queda dentro del margen de 3 segundos.
+- Se mejoró igual el manejo de este caso puntual: ahora se loguea aparte, sin alarmar como error grave, y no se intenta responder de nuevo (algo que iba a fallar exactamente igual).
+
+## Tienda: 2 items nuevos (5 en total)
+
+- 🔮 **Amuleto contra el Vacío** (450 Feathers): garantiza que tu próximo cofre no te dé "Nothing" — sacás algo sí o sí.
+- ⏩ **Acelerador Temporal** (320 Feathers): completa al instante todo tu ingreso pasivo de rol pendiente la próxima vez que uses `/claim`.
+
+---
+
 # Xerion v1.9.0 — Qué cambió
 
 ## 🔴 Arreglo urgente: beneficios de rol sin tener el rol

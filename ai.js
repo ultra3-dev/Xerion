@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.0 — ai.js
+ *  XERION v1.9.1 — ai.js
  *  Integración con Groq (API compatible con OpenAI) para el chat: la gente
  *  puede hablar con el bot mencionándolo (@Xerion) o respondiendo a un
  *  mensaje que la IA generó antes. Nada más activa la IA — nunca se mete

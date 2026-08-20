@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.0 — database.js
+ *  XERION v1.9.1 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -47,6 +47,8 @@ const XERION_USERS_COLUMNS = [
   ['shields', 'INTEGER NOT NULL DEFAULT 0'],
   ['luck_charms', 'INTEGER NOT NULL DEFAULT 0'],
   ['revives', 'INTEGER NOT NULL DEFAULT 0'],
+  ['void_wards', 'INTEGER NOT NULL DEFAULT 0'],
+  ['time_skips', 'INTEGER NOT NULL DEFAULT 0'],
   ['last_daily_claim_at', 'TIMESTAMPTZ'],
   ['daily_claims', 'INTEGER NOT NULL DEFAULT 0'],
   ['current_streak', 'INTEGER NOT NULL DEFAULT 0'],
@@ -544,7 +546,7 @@ async function getEnabledNotificationUserIds() {
 async function getShopCounts(userId) {
   await ensureUser(userId);
   const { rows } = await pool.query(
-    `SELECT feathers, shields, luck_charms, revives FROM xerion_users WHERE user_id = $1;`,
+    `SELECT feathers, shields, luck_charms, revives, void_wards, time_skips FROM xerion_users WHERE user_id = $1;`,
     [userId],
   );
   return rows[0];
@@ -557,7 +559,7 @@ async function buyShopItem(userId, column, cost) {
     `UPDATE xerion_users
      SET feathers = feathers - $2, total_feathers_spent = total_feathers_spent + $2, ${column} = ${column} + 1
      WHERE user_id = $1 AND feathers >= $2
-     RETURNING feathers, shields, luck_charms, revives;`,
+     RETURNING feathers, shields, luck_charms, revives, void_wards, time_skips;`,
     [userId, cost],
   );
   return rows[0] || null; // null = no tenía suficientes feathers
@@ -573,6 +575,23 @@ async function buyCharm(userId) {
 
 async function buyRevive(userId) {
   return buyShopItem(userId, 'revives', SHOP_ITEMS.REVIVE.cost);
+}
+
+async function buyVoidWard(userId) {
+  return buyShopItem(userId, 'void_wards', SHOP_ITEMS.WARD.cost);
+}
+
+async function buyTimeSkip(userId) {
+  return buyShopItem(userId, 'time_skips', SHOP_ITEMS.TIME_SKIP.cost);
+}
+
+/** Consume un Amuleto contra el Vacío si tiene uno disponible. Devuelve true si se consumió (y por lo tanto aplica). */
+async function consumeVoidWardIfAvailable(userId) {
+  const { rows } = await pool.query(
+    `UPDATE xerion_users SET void_wards = void_wards - 1 WHERE user_id = $1 AND void_wards > 0 RETURNING void_wards;`,
+    [userId],
+  );
+  return rows.length > 0;
 }
 
 async function getShieldCounts(userIds) {
@@ -695,23 +714,37 @@ async function collectRoleIncome(userId, heldRoleKeys = []) {
       params.push(new Date(now));
       setClauses.push(`${cols.at} = $${params.length}`);
     } else {
-      pending.push({ key, readyAt: new Date(lastAt + intervalMs) });
+      pending.push({ key, amount, cols, readyAt: new Date(lastAt + intervalMs) });
     }
+  }
+
+  // Acelerador Temporal: si tiene uno y hay algo pendiente, lo completa todo al instante.
+  let usedTimeSkip = false;
+  if (pending.length > 0 && (row.time_skips || 0) > 0) {
+    usedTimeSkip = true;
+    for (const p of pending) {
+      claimed.push({ key: p.key, amount: p.amount });
+      totalAmount += p.amount;
+      params.push(new Date(now));
+      setClauses.push(`${p.cols.at} = $${params.length}`);
+    }
+    pending.length = 0;
   }
 
   if (claimed.length > 0) {
     params.push(totalAmount);
+    const timeSkipSet = usedTimeSkip ? `, time_skips = time_skips - 1` : '';
     await pool.query(
       `UPDATE xerion_users
        SET feathers = feathers + $${params.length},
            total_feathers_earned = total_feathers_earned + $${params.length},
-           ${setClauses.join(', ')}
+           ${setClauses.join(', ')}${timeSkipSet}
        WHERE user_id = $1;`,
       params,
     );
   }
 
-  return { claimed, pending, totalAmount, hasAnyRole: heldRoleKeys.length > 0 };
+  return { claimed, pending, totalAmount, hasAnyRole: heldRoleKeys.length > 0, usedTimeSkip };
 }
 
 /**
@@ -765,6 +798,9 @@ module.exports = {
   buyShield,
   buyCharm,
   buyRevive,
+  buyVoidWard,
+  buyTimeSkip,
+  consumeVoidWardIfAvailable,
   getShieldCounts,
   consumeShields,
   getReviveCounts,

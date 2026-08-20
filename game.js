@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.0 — game.js
+ *  XERION v1.9.1 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -30,6 +30,7 @@ const {
   pickChestType,
   rollReward,
   applyLuckBoost,
+  applyVoidWard,
   rollFeatherAmount,
   computeSpawnChance,
   sleep,
@@ -98,6 +99,7 @@ function chestSnapshot(state) {
     rewardKey: state.reward?.key || null,
     rewardAmount: state.reward?.amount ?? null,
     luckBoosted: Boolean(state.luckBoosted),
+    wardUsed: Boolean(state.wardUsed),
     round: Number(state.round || 0),
     openDeadlineAt: state.openDeadlineAt || null,
     excludedWinnerIds: [...(state.excludedWinnerIds || [])],
@@ -646,6 +648,7 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
 
   // Amuleto de Suerte: si el ganador tiene uno, se consume y mejora la tabla para ESTA tirada.
   let luckBoosted = Boolean(state?.luckBoosted);
+  let wardUsed = Boolean(state?.wardUsed);
   let reward = state?.rewardKey ? chestType.rewardTable.find((item) => item.key === state.rewardKey) : null;
   if (reward) {
     reward = { ...reward };
@@ -658,12 +661,19 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
     } catch (err) {
       console.error('[Xerion] Error consultando/consumiendo el amuleto de suerte:', err);
     }
+    try {
+      wardUsed = await db.consumeVoidWardIfAvailable(winnerId);
+      if (wardUsed) table = applyVoidWard(table);
+    } catch (err) {
+      console.error('[Xerion] Error consultando/consumiendo el amuleto contra el vacío:', err);
+    }
 
     reward = rollReward(table);
     if (reward.kind === 'currency') reward = { ...reward, amount: rollFeatherAmount(reward) };
     if (state) {
       state.reward = reward;
       state.luckBoosted = luckBoosted;
+      state.wardUsed = wardUsed;
       await persistChestState(state);
     }
   }
@@ -724,7 +734,7 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
 
   await channel
     .send({
-      components: [visuals.buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted)],
+      components: [visuals.buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted, wardUsed)],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: pingOnly([winnerId]),
     })
@@ -774,7 +784,8 @@ async function handleShopBuy(interaction, itemKey) {
   }
 
   const item = SHOP_ITEMS[itemKey];
-  const buyFn = itemKey === 'SHIELD' ? db.buyShield : itemKey === 'CHARM' ? db.buyCharm : db.buyRevive;
+  const BUY_FUNCTIONS = { SHIELD: db.buyShield, CHARM: db.buyCharm, REVIVE: db.buyRevive, WARD: db.buyVoidWard, TIME_SKIP: db.buyTimeSkip };
+  const buyFn = BUY_FUNCTIONS[itemKey];
 
   let result;
   try {
@@ -1501,6 +1512,8 @@ async function handleInteraction(interaction) {
       if (id.startsWith('xerion_buy_shield::')) return await handleShopBuy(interaction, 'SHIELD');
       if (id.startsWith('xerion_buy_charm::')) return await handleShopBuy(interaction, 'CHARM');
       if (id.startsWith('xerion_buy_revive::')) return await handleShopBuy(interaction, 'REVIVE');
+      if (id.startsWith('xerion_buy_ward::')) return await handleShopBuy(interaction, 'WARD');
+      if (id.startsWith('xerion_buy_timeskip::')) return await handleShopBuy(interaction, 'TIME_SKIP');
       if (id.startsWith('xerion_notif_toggle::')) return await handleNotifToggle(interaction);
       if (id.startsWith('xerion_streak_toggle::')) return await handleStreakToggle(interaction);
       if (id.startsWith('xerion_leaderboard_prev::') || id.startsWith('xerion_leaderboard_next::')) {
@@ -1521,6 +1534,16 @@ async function handleInteraction(interaction) {
       }
     }
   } catch (err) {
+    // 10062 = "Unknown interaction": la interacción ya pasó los 3s que da
+    // Discord para responder (típicamente un backlog de clics/comandos
+    // viejos entregados de golpe tras una reconexión). No es un bug, no
+    // tiene arreglo posible del lado del bot, y responder de nuevo fallaría
+    // exactamente igual — así que se loguea aparte, sin alarmar, y no se
+    // reintenta nada.
+    if (err?.code === 10062) {
+      console.log('[Xerion] Interacción vencida (>3s), se ignora — no es un error real.');
+      return;
+    }
     console.error('[Xerion] Error manejando una interacción:', err);
     const payload = { content: 'Something went wrong — try again in a moment.', flags: MessageFlags.Ephemeral };
     if (interaction.deferred || interaction.replied) {
