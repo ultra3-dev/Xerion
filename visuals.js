@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.1 — visuals.js
+ *  XERION v1.9.2 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.1 — database.js
+ *  XERION v1.9.2 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.

@@ -1,3 +1,12 @@
+# Xerion v1.9.2 — Qué cambió
+
+## Arreglo real: la IA se activaba cuando no debía
+
+- Confirmado con tu reporte: responder a un mensaje de eliminación (o a cualquier mensaje del bot) activaba la IA igual, y escribir `@everyone`/`@here` también. La causa: Discord cuenta técnicamente esas dos cosas como "mención", y el código no las estaba filtrando.
+- Arreglado con las opciones correctas de discord.js: ahora solo cuenta como mención un `@Xerion` explícito escrito de verdad, o responder a un mensaje que la IA generó ella misma. Nada más activa el chat.
+
+---
+
 # Xerion v1.9.1 — Qué cambió
 
 ## Arreglo: errores de "Unknown interaction" tras reconectar

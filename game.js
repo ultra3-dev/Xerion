@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.1 — game.js
+ *  XERION v1.9.2 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -1471,7 +1471,12 @@ async function handleMessage(message) {
  * a mensajes normales del bot (cofres, ganadores, etc.) nunca la activa.
  */
 function shouldTriggerAiChat(message) {
-  if (message.mentions.has(message.client.user.id)) return true;
+  // ignoreEveryone: un @everyone/@here NO cuenta como que me mencionaron a mí.
+  // ignoreRepliedUser: responder a CUALQUIER mensaje del bot (con el "ping"
+  // de respuesta activado, que es el comportamiento por defecto de Discord)
+  // NO cuenta como mención — si no, cualquier respuesta a un mensaje de
+  // eliminación, de cofre, etc. activaría la IA por error.
+  if (message.mentions.has(message.client.user.id, { ignoreEveryone: true, ignoreRepliedUser: true })) return true;
   const refId = message.reference?.messageId;
   return Boolean(refId && aiMessageIds.has(refId));
 }
