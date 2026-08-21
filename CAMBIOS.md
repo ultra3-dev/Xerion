@@ -1,3 +1,19 @@
+# Xerion v1.9.3 — Qué cambió
+
+## Sistema de Portales (nuevo, completo)
+
+- Cada 1 hora hay 50% de probabilidad de que se abra un portal (si no hay uno activo ya) — el reloj vive en la base de datos, así que un reinicio del bot no lo reinicia.
+- **3 rangos, estilo Solo Leveling**: Portal Rango-E (Inestable, común), Portal Rango-B (Cazador, medio), Portal Rango-S (Monarca, rarísimo) — cada uno con su propia apuesta mínima y su propio reparto.
+- Para entrar apostás Feathers con un modal (formulario de Discord) — **mientras más apostás, más probabilidad real de ganar tenés** (verificado con 20,000 simulaciones: la probabilidad coincide con la teoría casi exacta).
+- Se cierra a los 10 minutos. Si nadie entra, se cierra solo. Si entra una sola persona, se le devuelve la apuesta (no hay contra quién competir).
+- Con 2+ participantes, el Boss del portal "elimina" contendientes en una animación de Canvas completamente nueva — círculo alrededor de un Boss con un anillo de portal brillante, nada que ver con la ruleta de los cofres.
+- Reparto final: el ganador se lleva un % del pozo (55/60/70% según el rango), el resto se reparte entre todos los demás según cuánto apostó cada uno, y un 10% sale de la economía — las Feathers tienen riesgo real.
+- Todo persiste igual que los cofres: si el bot se reinicia con un portal activo, retoma exactamente donde quedó, sin perder ni una apuesta.
+
+**Todavía falta:** conectarlo al panel del owner para forzarlo manualmente (`/panel-owner`, que es la próxima pieza grande), y avisar en `/help` que existe.
+
+---
+
 # Xerion v1.9.2 — Qué cambió
 
 ## Arreglo real: la IA se activaba cuando no debía

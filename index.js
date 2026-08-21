@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.2 — index.js
+ *  XERION v1.9.3 — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -294,6 +294,20 @@ client.once(Events.ClientReady, async (readyClient) => {
   // y registra únicamente el set actual de comandos.
   await game.clearAndRegisterSlashCommands(readyClient);
   await game.restoreActiveChest(readyClient);
+  await game.restorePortals(readyClient);
+
+  // Chequeo de portales: se revisa cada pocos minutos si ya pasó 1h desde
+  // el último chequeo (el reloj real vive en la base de datos, así que un
+  // reinicio del bot no lo reinicia — ver checkPortalSpawn/getLastPortalCheckAt).
+  const portalChannel = await readyClient.channels.fetch(CONFIG.PORTAL_CHANNEL_ID).catch((err) => {
+    console.error('[Xerion] No se pudo obtener el canal de portales:', err.message);
+    return null;
+  });
+  if (portalChannel) {
+    setInterval(() => {
+      game.checkPortalSpawn(portalChannel).catch((err) => console.error('[Xerion] Error en el chequeo periódico de portal:', err));
+    }, 5 * 60 * 1000);
+  }
 });
 
 client.on(Events.MessageCreate, (message) => {

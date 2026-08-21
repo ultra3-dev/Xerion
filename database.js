@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.2 — database.js
+ *  XERION v1.9.3 — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -81,6 +81,7 @@ const XERION_STATE_COLUMNS = [
   // solo permite reconstruir una partida si el proceso pierde la conexión.
   ['active_chest', 'JSONB'],
   ['active_chest_updated_at', 'TIMESTAMPTZ'],
+  ['last_portal_check_at', 'TIMESTAMPTZ'],
 ];
 
 /**
@@ -179,6 +180,16 @@ async function initDatabase() {
      ON CONFLICT (channel_id) DO NOTHING;`,
     [CONFIG.CHEST_CHANNEL_ID],
   );
+
+  // Mismo patrón que xerion_active_chests, pero para portales — un snapshot
+  // JSONB genérico es suficiente para reconstruir todo tras un reinicio.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS xerion_active_portals (
+      channel_id TEXT PRIMARY KEY,
+      snapshot JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS xerion_notifications (
@@ -495,6 +506,64 @@ async function getActiveChests() {
   return rows;
 }
 
+// ============================================================================
+// PORTALES — persistencia (mismo patrón que los cofres) + apuestas y pagos.
+// ============================================================================
+
+async function savePortal(channelId, snapshot) {
+  await pool.query(
+    `INSERT INTO xerion_active_portals (channel_id, snapshot, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (channel_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW();`,
+    [channelId, JSON.stringify(snapshot)],
+  );
+}
+
+async function clearPortal(channelId) {
+  await pool.query(`DELETE FROM xerion_active_portals WHERE channel_id = $1;`, [channelId]);
+}
+
+async function getActivePortals() {
+  const { rows } = await pool.query(`SELECT channel_id, snapshot FROM xerion_active_portals;`);
+  return rows;
+}
+
+/** Hora del último chequeo de spawn de portal (para no perder el reloj de 1h si el bot se reinicia). */
+async function getLastPortalCheckAt() {
+  const { rows } = await pool.query(`SELECT last_portal_check_at FROM xerion_state WHERE id = 1;`);
+  return rows[0]?.last_portal_check_at || null;
+}
+
+async function setLastPortalCheckAt(date = new Date()) {
+  await pool.query(`UPDATE xerion_state SET last_portal_check_at = $1 WHERE id = 1;`, [date]);
+}
+
+/** Descuenta la apuesta si tiene suficientes Feathers. Devuelve el saldo resultante, o null si no le alcanzaba. */
+async function stakePortalEntry(userId, amount) {
+  await ensureUser(userId);
+  const { rows } = await pool.query(
+    `UPDATE xerion_users SET feathers = feathers - $2 WHERE user_id = $1 AND feathers >= $2 RETURNING feathers;`,
+    [userId, amount],
+  );
+  return rows[0]?.feathers ?? null;
+}
+
+/** Devuelve una apuesta si el portal se cancela (nadie más entró, etc.) — no cuenta como ganancia. */
+async function refundPortalEntry(userId, amount) {
+  await pool.query(`UPDATE xerion_users SET feathers = feathers + $2 WHERE user_id = $1;`, [userId, amount]);
+}
+
+/** Aplica el reparto final de un portal. `payouts` es [{ userId, amount }] (ganador + demás, ya calculado). */
+async function payoutPortalResults(payouts) {
+  for (const p of payouts) {
+    if (p.amount <= 0) continue;
+    await pool.query(
+      `UPDATE xerion_users SET feathers = feathers + $2, total_feathers_earned = total_feathers_earned + $2 WHERE user_id = $1;`,
+      [p.userId, p.amount],
+    );
+  }
+}
+
 async function getServerStats(channelId = CONFIG.CHEST_CHANNEL_ID) {
   const state = await getState(channelId);
   const { rows } = await pool.query(
@@ -790,6 +859,14 @@ module.exports = {
   getActiveChests,
   saveActiveChest,
   clearActiveChest,
+  savePortal,
+  clearPortal,
+  getActivePortals,
+  getLastPortalCheckAt,
+  setLastPortalCheckAt,
+  stakePortalEntry,
+  refundPortalEntry,
+  payoutPortalResults,
   getServerStats,
   getNotificationEnabled,
   setNotificationEnabled,

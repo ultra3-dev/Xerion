@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.2 — config.js
+ *  XERION v1.9.3 — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.9.2',
+  VERSION: '1.9.3',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -25,6 +25,10 @@ const CONFIG = {
 
   // Específico de tu servidor
   CHEST_CHANNEL_ID: '1489672925299605555',
+  // Opcional: si querés que los portales aparezcan en otro canal, poné
+  // PORTAL_CHANNEL_ID en las variables de entorno. Si no, usan el mismo
+  // canal que los cofres — así no hace falta configurar nada nuevo.
+  PORTAL_CHANNEL_ID: process.env.PORTAL_CHANNEL_ID || '1489672925299605555',
   OWNER_ID: '1064678074010058752',
 
   ROLE_IDS: {
@@ -81,6 +85,9 @@ const CONFIG = {
     CENIZA: 0x9a958c,
     BRASA: 0xff6b35,
     ABISMO: 0x3b0764,
+    PORTAL_E: 0x2dd4bf,
+    PORTAL_B: 0x7c3aed,
+    PORTAL_S: 0xdc2626,
   },
 };
 
@@ -172,6 +179,109 @@ const CHEST_TYPES = {
 };
 
 const CHEST_TYPE_LIST = Object.values(CHEST_TYPES);
+
+// ============================================================================
+// PORTALES — evento de apuesta estilo "gate" (Solo Leveling). Cada 1h hay
+// 50% de probabilidad de que se abra uno (ver PORTAL_CHECK_*). La gente
+// apuesta Feathers para entrar: mientras más pone, más probabilidad tiene
+// de ganar (es un sorteo ponderado por apuesta, no una pelea por rondas —
+// así la probabilidad real siempre es exacta y auditable). El panel narra
+// el "Boss del portal" eliminando contendientes, pero matemáticamente es
+// un sorteo limpio de un solo paso.
+//
+// Reparto al cerrar: el ganador se lleva un % del pozo total, el resto se
+// reparte entre TODOS los demás participantes (proporcional a lo que
+// apostaron), y un % se retira de la economía (sink, para que las Feathers
+// tengan riesgo real). Entre más raro el portal, más se lleva el ganador.
+// ============================================================================
+
+const PORTAL_TYPES = {
+  RANGO_E: {
+    key: 'RANGO_E',
+    name: 'Portal Rango-E',
+    rankLabel: 'Inestable',
+    emoji: '🌀',
+    color: CONFIG.COLORS.PORTAL_E,
+    weight: 65,
+    minStake: 20,
+    flavor: 'Un portal débil, recién formado. El Boss que guarda no da mucha pelea — buena entrada para arriesgar poco.',
+    payout: { winnerPct: 0.55, othersPct: 0.35, burnPct: 0.10 },
+  },
+  RANGO_B: {
+    key: 'RANGO_B',
+    name: 'Portal Rango-B',
+    rankLabel: 'Cazador',
+    emoji: '🌌',
+    color: CONFIG.COLORS.PORTAL_B,
+    weight: 28,
+    minStake: 60,
+    flavor: 'Ya se siente la presión del otro lado. El Boss elimina en serio — apostar acá es apostar de verdad.',
+    payout: { winnerPct: 0.60, othersPct: 0.30, burnPct: 0.10 },
+  },
+  RANGO_S: {
+    key: 'RANGO_S',
+    name: 'Portal Rango-S',
+    rankLabel: 'Monarca',
+    emoji: '🔴',
+    color: CONFIG.COLORS.PORTAL_S,
+    weight: 7,
+    minStake: 150,
+    flavor: 'Casi nunca se abre uno así. Lo que guarda del otro lado es letal — pero quien sale, sale con casi todo.',
+    payout: { winnerPct: 0.70, othersPct: 0.20, burnPct: 0.10 },
+  },
+};
+
+const PORTAL_TYPE_LIST = Object.values(PORTAL_TYPES);
+
+/** Elige un tipo de portal al azar según su peso, o fuerza uno si se pasa forcedKey. */
+function pickPortalType(forcedKey = null) {
+  if (forcedKey && PORTAL_TYPES[forcedKey]) return PORTAL_TYPES[forcedKey];
+  const totalWeight = PORTAL_TYPE_LIST.reduce((sum, t) => sum + t.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const type of PORTAL_TYPE_LIST) {
+    roll -= type.weight;
+    if (roll <= 0) return type;
+  }
+  return PORTAL_TYPE_LIST[0];
+}
+
+/** Elige al ganador con probabilidad proporcional a lo que apostó cada quien (sorteo ponderado). */
+function pickWeightedPortalWinner(participants) {
+  const totalStake = participants.reduce((sum, p) => sum + p.stake, 0);
+  let roll = Math.random() * totalStake;
+  for (const p of participants) {
+    roll -= p.stake;
+    if (roll <= 0) return p.userId;
+  }
+  return participants[participants.length - 1].userId;
+}
+
+/**
+ * Calcula el reparto final de un portal ya cerrado. `participants` es
+ * [{ userId, stake }]. Devuelve { winnerId, winnerAmount, othersPayouts,
+ * burnedAmount, totalPot } — othersPayouts es [{ userId, amount }],
+ * proporcional a la apuesta de cada quien (nunca incluye al ganador).
+ */
+function computePortalPayouts(portalType, participants) {
+  const totalPot = participants.reduce((sum, p) => sum + p.stake, 0);
+  const winnerId = pickWeightedPortalWinner(participants);
+  const winnerAmount = Math.round(totalPot * portalType.payout.winnerPct);
+  const burnedAmount = Math.round(totalPot * portalType.payout.burnPct);
+  const othersPoolAmount = totalPot - winnerAmount - burnedAmount;
+
+  const others = participants.filter((p) => p.userId !== winnerId);
+  const othersStakeTotal = others.reduce((sum, p) => sum + p.stake, 0);
+  const othersPayouts = others
+    .map((p) => ({ userId: p.userId, amount: othersStakeTotal > 0 ? Math.round(othersPoolAmount * (p.stake / othersStakeTotal)) : 0 }))
+    .filter((p) => p.amount > 0);
+
+  return { winnerId, winnerAmount, othersPayouts, burnedAmount, totalPot };
+}
+
+// Cada 1h se tira una moneda: 50% de que se abra un portal (si no hay uno activo ya).
+const PORTAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+const PORTAL_SPAWN_CHANCE = 0.5;
+const PORTAL_JOIN_WINDOW_MS = 10 * 60 * 1000; // 10 minutos para apostar y entrar
 
 /** Elige un tipo de cofre al azar según su peso, o fuerza uno si se pasa forcedKey. */
 function pickChestType(forcedKey = null) {
@@ -491,6 +601,13 @@ module.exports = {
   CHEST_TYPES,
   CHEST_TYPE_LIST,
   pickChestType,
+  PORTAL_TYPES,
+  PORTAL_TYPE_LIST,
+  pickPortalType,
+  computePortalPayouts,
+  PORTAL_CHECK_INTERVAL_MS,
+  PORTAL_SPAWN_CHANCE,
+  PORTAL_JOIN_WINDOW_MS,
   SHOP_ITEMS,
   computeSpawnChance,
   messagesUntilNextIncrease,

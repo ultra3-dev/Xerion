@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.2 — visuals.js
+ *  XERION v1.9.3 — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -44,6 +44,7 @@ const {
   ACHIEVEMENTS,
   countCompletedAchievements,
   achievementBonusMultiplier,
+  PORTAL_TYPE_LIST,
 } = require('./config.js');
 
 // ============================================================================
@@ -612,6 +613,133 @@ function buildPlayerSpinContainer(chestType, attachmentName = 'player-spin.png')
 }
 
 // ============================================================================
+// MOTOR DE CANVAS — PORTALES. A propósito NADA parecido a la ruleta
+// horizontal de los cofres: acá los participantes forman un círculo
+// alrededor de un Boss, con un anillo de portal brillante detrás — mismo
+// espíritu defensivo (nunca dibuja emoji/texto de usuario como glifo
+// riesgoso, solo geometría + los avatares ya cargados como imagen).
+// ============================================================================
+
+const PORTAL_W = 780;
+const PORTAL_H = 460;
+
+function drawPortalBoss(ctx, cx, cy, r, g, b) {
+  ctx.save();
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.9)`;
+  ctx.shadowBlur = 22;
+  ctx.fillStyle = `rgba(${Math.floor(r * 0.35)}, ${Math.floor(g * 0.35)}, ${Math.floor(b * 0.35)}, 0.95)`;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 46, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${Math.min(255, r + 70)}, ${Math.min(255, g + 70)}, ${Math.min(255, b + 70)}, 1)`;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // un par de picos arriba — silueta simple, nunca texto/emoji
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dir * 30, cy - 34);
+    ctx.lineTo(cx + dir * 46, cy - 68);
+    ctx.lineTo(cx + dir * 14, cy - 40);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner = null) {
+  const canvas = createCanvas(PORTAL_W, PORTAL_H);
+  const ctx = canvas.getContext('2d');
+  const { r, g, b } = hexToRgb(portalType.color);
+  const cx = PORTAL_W / 2;
+  const cy = PORTAL_H / 2 + 6;
+
+  const bg = ctx.createRadialGradient(cx, cy, 20, cx, cy, PORTAL_H * 0.85);
+  bg.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.4)`);
+  bg.addColorStop(0.55, 'rgba(10, 8, 14, 1)');
+  bg.addColorStop(1, '#020103');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, PORTAL_W, PORTAL_H);
+
+  const ringRadius = 150;
+  for (const [rad, width, alpha] of [[ringRadius, 10, 0.9], [ringRadius - 18, 3, 0.5], [ringRadius + 16, 2, 0.32]]) {
+    ctx.save();
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.85)`;
+    ctx.shadowBlur = 22;
+    ctx.strokeStyle = `rgba(${Math.min(255, r + 55)}, ${Math.min(255, g + 55)}, ${Math.min(255, b + 55)}, ${alpha})`;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawPortalBoss(ctx, cx, cy, r, g, b);
+
+  const n = users.length;
+  const avatarRadius = ringRadius + 64;
+  const winnerIdx = forcedWinner ? users.findIndex((u) => u.id === forcedWinner.id) : -1;
+
+  for (let i = 0; i < n; i++) {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const ax = cx + Math.cos(angle) * avatarRadius;
+    const ay = cy + Math.sin(angle) * avatarRadius;
+    const isWinner = i === winnerIdx;
+    const size = isWinner ? 78 : 54;
+    const img = avatarMap.get(users[i].id) || null;
+
+    if (isWinner) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 215, 90, 0.95)';
+      ctx.shadowBlur = 30;
+      ctx.beginPath();
+      ctx.arc(ax, ay, size / 2 + 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 215, 90, 0.18)';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (img) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, ax - size / 2, ay - size / 2, size, size);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.lineWidth = isWinner ? 4 : 2;
+    ctx.strokeStyle = isWinner ? '#ffd75a' : 'rgba(255,255,255,0.4)';
+    ctx.beginPath();
+    ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (isWinner) {
+      ctx.fillStyle = '#ffd75a';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.shadowBlur = 4;
+      const name = (users[i].username || users[i].globalName || '???').slice(0, 14);
+      ctx.fillText(name, ax, ay + size / 2 + 20);
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  return canvas.toBuffer('image/png');
+}
+
+function portalSpinFrameAttachment(users, avatarMap, portalType, forcedWinner = null, name = 'portal-battle.png') {
+  const buffer = generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner);
+  return new AttachmentBuilder(buffer, { name });
+}
+
+// ============================================================================
 // COMPONENTS V2 — flujo del cofre (aparición, eliminación, apertura).
 // ============================================================================
 
@@ -696,6 +824,93 @@ function buildOpenRow(winnerId, disabled = false, mapKey = '') {
       .setStyle(ButtonStyle.Primary)
       .setDisabled(disabled),
   );
+}
+
+// ============================================================================
+// COMPONENTS V2 — flujo del portal (aparición, batalla, resultado). A
+// propósito con su propia identidad visual — nada de reusar el diseño del
+// cofre, ni en texto ni en estructura.
+// ============================================================================
+
+function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = false }) {
+  const lines = participants.length
+    ? participants
+      .slice()
+      .sort((a, b) => b.stake - a.stake)
+      .slice(0, 8)
+      .map((p) => `<@${p.userId}> — \`${formatNumber(p.stake)}\` ${FEATHER_EMOJI}`)
+    : ['Nadie se animó todavía...'];
+  if (participants.length > 8) lines.push(`...y ${participants.length - 8} más.`);
+
+  return new ContainerBuilder()
+    .setAccentColor(portalType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `# ${portalType.emoji} Se abrió un ${portalType.name}`,
+          `-# Rango: ${portalType.rankLabel} · Xerion v${CONFIG.VERSION}`,
+          '',
+          `> ${portalType.flavor}`,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `**${FEATHER_EMOJI} Apuesta mínima:** \`${formatNumber(portalType.minStake)}\``,
+          `**🏆 El ganador se lleva:** \`${Math.round(portalType.payout.winnerPct * 100)}%\` del pozo`,
+          `**🤝 El resto se reparte:** \`${Math.round(portalType.payout.othersPct * 100)}%\` (según cuánto apostó cada quien)`,
+          `**⏳ Se cierra:** <t:${Math.floor(endsAt / 1000)}:R>`,
+          `**${FEATHER_EMOJI} Pozo actual:** \`${formatNumber(pot)}\``,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Dentro ahora:**\n${lines.join('\n')}`))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`xerion_portal_stake::${portalType.key}`)
+          .setLabel('Apostar y entrar')
+          .setEmoji(portalType.emoji)
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(disabled),
+      ),
+    );
+}
+
+function buildPortalBattleContainer(portalType, attachmentName = 'portal-battle.png') {
+  return new ContainerBuilder()
+    .setAccentColor(portalType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# ${portalType.emoji} El Boss de ${portalType.name} está eliminando contendientes...`),
+    )
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
+    );
+}
+
+function buildPortalResultEmbed(payout, portalType) {
+  const lines = [
+    `# ${portalType.emoji} ${portalType.name} — Cerrado`,
+    '',
+    `## 🏆 <@${payout.winnerId}> sobrevivió al Boss`,
+    `Se lleva **${formatNumber(payout.winnerAmount)}** ${FEATHER_EMOJI} del pozo de \`${formatNumber(payout.totalPot)}\`.`,
+  ];
+  if (payout.othersPayouts.length > 0) {
+    lines.push(
+      '',
+      '**El resto recupera parte de su apuesta:**',
+      ...payout.othersPayouts.map((p) => `<@${p.userId}> — \`+${formatNumber(p.amount)}\` ${FEATHER_EMOJI}`),
+    );
+  }
+  lines.push('', `-# ${formatNumber(payout.burnedAmount)} ${FEATHER_EMOJI} se perdieron con el portal — así es el riesgo.`);
+
+  return new ContainerBuilder()
+    .setAccentColor(portalType.color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
 }
 
 function buildEmptyChestEmbed(chestType) {
@@ -1364,6 +1579,10 @@ module.exports = {
   generatePlayerSpinFrame,
   playerSpinFrameAttachment,
   buildPlayerSpinContainer,
+  portalSpinFrameAttachment,
+  buildPortalEmbed,
+  buildPortalBattleContainer,
+  buildPortalResultEmbed,
   buildRewardsFieldValue,
   buildChestEmbed,
   buildParticipateRow,

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.2 — game.js
+ *  XERION v1.9.3 — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -21,10 +21,15 @@ const {
   REST,
   Routes,
   MessageFlags,
+  ActionRowBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 
 const {
   CONFIG,
+  FEATHER_EMOJI,
   SHOP_ITEMS,
   CHEST_TYPES,
   pickChestType,
@@ -41,6 +46,9 @@ const {
   isOnCooldown,
   SAFE_MENTIONS,
   pingOnly,
+  PORTAL_TYPES,
+  pickPortalType,
+  computePortalPayouts,
 } = require('./config.js');
 
 const db = require('./database.js');
@@ -59,6 +67,14 @@ const visuals = require('./visuals.js');
 
 /** @type {Map<string, object>} channelId -> ChestState */
 const activeChests = new Map();
+
+// Portales: un solo portal activo por canal a la vez (a diferencia de los
+// cofres forzados, acá no hace falta soportar varios en paralelo). Se
+// persisten SIEMPRE (incluso los forzados por el owner) porque, a
+// diferencia de un cofre, la gente ya puso plumas reales en juego — perder
+// ese estado en un reinicio dejaría esas plumas descontadas sin portal al
+// que volver.
+const activePortals = new Map();
 
 // ============================================================================
 // CHAT CON IA — solo en memoria, nada de esto se persiste (no hace falta:
@@ -771,6 +787,307 @@ async function handleOpenChest(interaction) {
   }).catch(() => {});
 
   await finalizeChestOpen(interaction.channel, state);
+}
+
+// ============================================================================
+// PORTALES — apuesta estilo "gate" (Solo Leveling). Un portal por canal a
+// la vez. Sigue el mismo espíritu defensivo que los cofres: cualquier paso
+// que falle se loguea y se degrada sin romper el resto del bot.
+// ============================================================================
+
+function portalSnapshot(state) {
+  return {
+    channelId: state.channelId,
+    messageId: state.messageId,
+    portalTypeKey: state.portalType.key,
+    status: state.status,
+    endsAt: state.endsAt,
+    participants: Object.fromEntries(state.participants),
+    isForced: Boolean(state.isForced),
+  };
+}
+
+function persistPortalState(state) {
+  return db.savePortal(state.channelId, portalSnapshot(state)).catch((err) => {
+    console.error('[Xerion] No se pudo guardar el snapshot del portal:', err.message);
+  });
+}
+
+async function clearPersistedPortal(channelId) {
+  await db.clearPortal(channelId).catch((err) => {
+    console.error('[Xerion] No se pudo limpiar el snapshot del portal:', err.message);
+  });
+}
+
+/** Chequeo periódico: cada 1h, 50% de probabilidad de abrir un portal (si no hay uno activo ya). */
+async function checkPortalSpawn(channel) {
+  try {
+    const lastCheck = await db.getLastPortalCheckAt();
+    const msSinceCheck = lastCheck ? Date.now() - new Date(lastCheck).getTime() : Infinity;
+    if (msSinceCheck < CONFIG.PORTAL_CHECK_INTERVAL_MS) return;
+
+    await db.setLastPortalCheckAt(new Date());
+    if (activePortals.has(channel.id)) return; // ya hay uno abierto
+    if (Math.random() >= CONFIG.PORTAL_SPAWN_CHANCE) return; // no tocó esta vez
+
+    await spawnPortal(channel, null, false);
+  } catch (err) {
+    console.error('[Xerion] Error en el chequeo de spawn de portal:', err);
+  }
+}
+
+async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
+  if (activePortals.has(channel.id)) return false;
+
+  const portalType = pickPortalType(forcedTypeKey);
+  const endsAt = Date.now() + CONFIG.PORTAL_JOIN_WINDOW_MS;
+
+  const state = {
+    channelId: channel.id,
+    portalType,
+    status: 'waiting',
+    endsAt,
+    participants: new Map(), // userId -> stake
+    isForced,
+    messageId: null,
+  };
+  activePortals.set(channel.id, state);
+
+  try {
+    const message = await channel.send({
+      components: [visuals.buildPortalEmbed({ portalType, participants: [], pot: 0, endsAt })],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: SAFE_MENTIONS,
+    });
+    state.messageId = message.id;
+    await persistPortalState(state);
+  } catch (err) {
+    console.error('[Xerion] Error anunciando el portal:', err);
+    activePortals.delete(channel.id);
+    return false;
+  }
+
+  setTimeout(() => {
+    resolvePortalPhase(channel, state).catch((err) => console.error('[Xerion] Error resolviendo el portal:', err));
+  }, CONFIG.PORTAL_JOIN_WINDOW_MS);
+
+  console.log(`[Xerion] ${portalType.name} abierto en #${channel.id}${isForced ? ' (forzado por el owner)' : ''}.`);
+  return true;
+}
+
+function schedulePortalCountUpdate(state, message) {
+  if (state.status !== 'waiting') return;
+  const participants = [...state.participants.entries()].map(([userId, stake]) => ({ userId, stake }));
+  const pot = participants.reduce((sum, p) => sum + p.stake, 0);
+  message
+    .edit({
+      components: [visuals.buildPortalEmbed({ portalType: state.portalType, participants, pot, endsAt: state.endsAt })],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: SAFE_MENTIONS,
+    })
+    .catch(() => {});
+}
+
+async function resolvePortalPhase(channel, state) {
+  if (state.status !== 'waiting') return; // ya se resolvió (ej. por un restore)
+  state.status = 'resolving';
+  await persistPortalState(state);
+
+  const participants = [...state.participants.entries()].map(([userId, stake]) => ({ userId, stake }));
+
+  if (participants.length === 0) {
+    await channel
+      .send({
+        components: [visuals.buildOpeningStepEmbed(`${state.portalType.emoji} El portal se cerró solo — nadie se animó a entrar.`, state.portalType.color)],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: SAFE_MENTIONS,
+      })
+      .catch(() => {});
+    activePortals.delete(channel.id);
+    await clearPersistedPortal(channel.id);
+    return;
+  }
+
+  if (participants.length === 1) {
+    const solo = participants[0];
+    try {
+      await db.refundPortalEntry(solo.userId, solo.stake);
+    } catch (err) {
+      console.error('[Xerion] Error devolviendo apuesta en portal en solitario:', err);
+    }
+    await channel
+      .send({
+        content: `${state.portalType.emoji} <@${solo.userId}> fue el único en entrar al ${state.portalType.name} — se le devuelve su apuesta, nadie contra quien competir.`,
+        allowedMentions: pingOnly([solo.userId]),
+      })
+      .catch(() => {});
+    activePortals.delete(channel.id);
+    await clearPersistedPortal(channel.id);
+    return;
+  }
+
+  await runPortalBattleAnimation(channel, state, participants);
+  activePortals.delete(channel.id);
+  await clearPersistedPortal(channel.id);
+}
+
+/**
+ * Anima la "pelea contra el Boss" (ruleta de participantes, mismo motor que
+ * el re-sorteo de cofres) y al final aplica el reparto real ya calculado
+ * matemáticamente por computePortalPayouts — la animación es narrativa, el
+ * resultado siempre sale de esa función, nunca al revés.
+ */
+async function runPortalBattleAnimation(channel, state, participants) {
+  const payout = computePortalPayouts(state.portalType, participants);
+
+  let spinSucceeded = false;
+  let seqMessage = null;
+  try {
+    const users = (
+      await Promise.all(participants.map((p) => channel.client.users.fetch(p.userId).catch(() => null)))
+    ).filter(Boolean);
+    const winnerUser = users.find((u) => u.id === payout.winnerId) || null;
+
+    if (users.length > 0) {
+      seqMessage = await channel
+        .send({
+          components: [visuals.buildPortalBattleContainer(state.portalType)],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: SAFE_MENTIONS,
+        })
+        .catch(() => null);
+
+      if (seqMessage) {
+        const avatarMap = await visuals.preloadPlayerAvatars(users);
+        const spinDelays = [90, 100, 115, 130, 150, 175, 205, 240, 280, 330];
+        for (let i = 0; i < spinDelays.length; i++) {
+          const isLast = i === spinDelays.length - 1;
+          const attachment = visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType.color, isLast ? winnerUser : null);
+          await seqMessage.edit({
+            components: [visuals.buildPortalBattleContainer(state.portalType)],
+            flags: MessageFlags.IsComponentsV2,
+            files: [attachment],
+            attachments: [],
+          });
+          await sleep(spinDelays[i]);
+        }
+        spinSucceeded = true;
+      }
+    }
+  } catch (err) {
+    console.error('[Xerion] La animación del portal falló a mitad de camino, se degrada a texto:', err);
+  }
+
+  try {
+    await db.payoutPortalResults([{ userId: payout.winnerId, amount: payout.winnerAmount }, ...payout.othersPayouts]);
+  } catch (err) {
+    console.error('[Xerion] Error aplicando el reparto del portal:', err);
+  }
+
+  const resultPayload = {
+    components: [visuals.buildPortalResultEmbed(payout, state.portalType)],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: pingOnly([payout.winnerId]),
+  };
+  if (spinSucceeded && seqMessage) await seqMessage.edit(resultPayload).catch(() => {});
+  else await channel.send(resultPayload).catch(() => {});
+}
+
+async function handlePortalStakeButton(interaction) {
+  const state = activePortals.get(interaction.channelId);
+  if (!state || state.status !== 'waiting') {
+    return interaction.reply({ content: 'Este portal ya no está recibiendo apuestas.', flags: MessageFlags.Ephemeral });
+  }
+  if (interaction.member?.roles?.cache?.has(CONFIG.ROLE_IDS.BLACKLIST)) {
+    return interaction.reply({ content: '🚫 No puedes participar en los portales.', flags: MessageFlags.Ephemeral });
+  }
+
+  const modal = new ModalBuilder().setCustomId(`xerion_portal_stake_modal::${interaction.channelId}`).setTitle(`${state.portalType.name} — Apostar`);
+  const input = new TextInputBuilder()
+    .setCustomId('stake_amount')
+    .setLabel(`Feathers a apostar (mínimo ${state.portalType.minStake})`)
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder(String(state.portalType.minStake))
+    .setRequired(true);
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  await interaction.showModal(modal);
+}
+
+async function handlePortalStakeSubmit(interaction) {
+  const channelId = interaction.customId.split('::')[1];
+  const state = activePortals.get(channelId);
+  if (!state || state.status !== 'waiting') {
+    return interaction.reply({ content: 'Este portal ya no está recibiendo apuestas.', flags: MessageFlags.Ephemeral });
+  }
+
+  const raw = interaction.fields.getTextInputValue('stake_amount').replace(/[.,\s]/g, '');
+  const amount = Number.parseInt(raw, 10);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return interaction.reply({ content: 'Poné un número válido de Feathers.', flags: MessageFlags.Ephemeral });
+  }
+  if (amount < state.portalType.minStake) {
+    return interaction.reply({ content: `La apuesta mínima para ${state.portalType.name} es ${state.portalType.minStake} ${FEATHER_EMOJI}.`, flags: MessageFlags.Ephemeral });
+  }
+  if (state.participants.has(interaction.user.id)) {
+    return interaction.reply({ content: 'Ya estás dentro de este portal — solo se puede apostar una vez por portal.', flags: MessageFlags.Ephemeral });
+  }
+
+  const remaining = await db.stakePortalEntry(interaction.user.id, amount).catch((err) => {
+    console.error('[Xerion] Error descontando apuesta de portal:', err);
+    return undefined;
+  });
+  if (remaining === undefined) {
+    return interaction.reply({ content: 'Something went wrong — try again in a moment.', flags: MessageFlags.Ephemeral });
+  }
+  if (remaining === null) {
+    return interaction.reply({ content: `No te alcanzan las Feathers para apostar \`${amount}\`.`, flags: MessageFlags.Ephemeral });
+  }
+
+  state.participants.set(interaction.user.id, amount);
+  await persistPortalState(state);
+  await interaction.reply({ content: `✅ Entraste al ${state.portalType.name} apostando \`${amount}\` ${FEATHER_EMOJI}. Suerte.`, flags: MessageFlags.Ephemeral });
+
+  if (state.messageId) {
+    const channel = await interaction.client.channels.fetch(state.channelId).catch(() => null);
+    const message = channel ? await channel.messages.fetch(state.messageId).catch(() => null) : null;
+    if (channel && message) schedulePortalCountUpdate(state, message);
+  }
+}
+
+/** Restaura portales activos tras un reinicio — mismo espíritu que restoreActiveChest. */
+async function restorePortals(client) {
+  const rows = await db.getActivePortals().catch((err) => {
+    console.error('[Xerion] Error leyendo portales activos:', err);
+    return [];
+  });
+
+  for (const row of rows) {
+    const snapshot = row.snapshot;
+    const portalType = PORTAL_TYPES[snapshot.portalTypeKey];
+    if (!snapshot?.channelId || !portalType) continue;
+
+    const channel = await client.channels.fetch(snapshot.channelId).catch(() => null);
+    if (!channel) {
+      await clearPersistedPortal(snapshot.channelId);
+      continue;
+    }
+
+    const state = {
+      channelId: snapshot.channelId,
+      portalType,
+      status: snapshot.status,
+      endsAt: snapshot.endsAt,
+      participants: new Map(Object.entries(snapshot.participants || {})),
+      isForced: Boolean(snapshot.isForced),
+      messageId: snapshot.messageId,
+    };
+    activePortals.set(state.channelId, state);
+
+    const msLeft = Math.max(0, Number(state.endsAt || Date.now()) - Date.now());
+    setTimeout(() => {
+      resolvePortalPhase(channel, state).catch((err) => console.error('[Xerion] Error resolviendo portal tras reinicio:', err));
+    }, msLeft);
+  }
 }
 
 // ============================================================================
@@ -1537,6 +1854,11 @@ async function handleInteraction(interaction) {
           allowedMentions: SAFE_MENTIONS,
         });
       }
+      if (id.startsWith('xerion_portal_stake::')) return await handlePortalStakeButton(interaction);
+    }
+    if (interaction.isModalSubmit()) {
+      const id = interaction.customId;
+      if (id.startsWith('xerion_portal_stake_modal::')) return await handlePortalStakeSubmit(interaction);
     }
   } catch (err) {
     // 10062 = "Unknown interaction": la interacción ya pasó los 3s que da
@@ -1564,4 +1886,7 @@ module.exports = {
   handleInteraction,
   clearAndRegisterSlashCommands,
   restoreActiveChest,
+  restorePortals,
+  checkPortalSpawn,
+  spawnPortal,
 };
