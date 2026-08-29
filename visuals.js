@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.2 ULTRA — visuals.js
+ *  XERION v2.0.4 ULTRA — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -47,6 +47,7 @@ const {
   countCompletedAchievements,
   achievementBonusMultiplier,
   PORTAL_TYPE_LIST,
+  PORTAL_SPAWN_CHANCE,
   EVENT_TYPES,
   EVENT_TYPE_LIST,
 } = require('./config.js');
@@ -1622,6 +1623,7 @@ function buildHelpContainer() {
            '**Comandos de Jugador**',
           '`/profile` [`xn profile`] — tus estadísticas completas, incluye tu posición',
           '`/inventory` [`xn inv`] — balance rápido',
+          '`/cooldowns` [`xn cooldowns`] — cuándo se recarga tu /daily y el ingreso de cada rol que tenés',
           '`/leaderboard` [`xn top`] — top Feather holders',
           '`/rates` [`xn rates`] — probabilidades de los 3 tipos de cofre',
           '`/portals` [`xn portals`] — los 3 rangos de portal y cuánto reparte cada uno',
@@ -1646,8 +1648,7 @@ function buildHelpContainer() {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          '**Comandos de Administrador**',
-          '`/spawn` [`xn spawn`] — fuerza un cofre rápido (opcionalmente elige el tipo) — máximo 5 a la vez, uno cada 30s',
+          '**Comando de Administrador**',
           '`/panel-owner` — panel de control completo: forzar cofres, forzar portales, y activar o cancelar un evento global',
         ].join('\n'),
       ),
@@ -1739,7 +1740,7 @@ function buildPortalRatesContainer() {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `-# Cada hora hay ${(CONFIG.PORTAL_SPAWN_CHANCE * 100).toFixed(0)}% de probabilidad de que se abra uno. Ventana de 10 minutos para apostar y entrar.`,
+        `-# Cada hora hay ${(PORTAL_SPAWN_CHANCE * 100).toFixed(0)}% de probabilidad de que se abra uno. Ventana de 10 minutos para apostar y entrar.`,
       ),
     );
 
@@ -1882,6 +1883,43 @@ function buildRoleIncomeContainer(result) {
   return buildSimpleContainer('Ingreso de Roles', 'Recolecta el ingreso pasivo de tus roles', lines, CONFIG.COLORS.FEATHERS);
 }
 
+/**
+ * /cooldowns — de un vistazo, cuándo se recarga tu /daily y el ingreso
+ * pasivo de cada rol que tenés ahora mismo. `roleIncomeList` es una lista
+ * ya calculada por game.js (uno por cada rol que el usuario tiene EN
+ * DISCORD en este momento — no por historial), cada uno con
+ * { key, name, emoji, ready, readyAt }.
+ */
+function buildCooldownsContainer(dailyInfo, roleIncomeList) {
+  const dailyLine = dailyInfo.ready
+    ? '✅ **Listo para reclamar ahora mismo.**'
+    : `⏳ Listo <t:${toUnixSeconds(dailyInfo.readyAt)}:R>`;
+
+  const container = new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.BRAND)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# Tus Cooldowns\n-# Todo lo que podés reclamar, de un vistazo'))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent([`**${FEATHER_EMOJI} /daily**`, dailyLine].join('\n')));
+
+  if (roleIncomeList.length === 0) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# No tenés ningún rol con ingreso pasivo ahora mismo.'));
+  } else {
+    for (const role of roleIncomeList) {
+      const line = role.ready ? '✅ **Listo para reclamar ahora mismo.**' : `⏳ Listo <t:${toUnixSeconds(role.readyAt)}:R>`;
+      container
+        .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent([`**${role.emoji} ${role.name}**`, line].join('\n')));
+    }
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Usa `/claim` para recolectar todo lo que esté listo de una sola vez.'));
+  }
+
+  return container;
+}
+
 function buildStreakContainer(stats, ownerId = '') {
   const visible = stats.streak_visible !== false;
   const container = new ContainerBuilder()
@@ -1983,6 +2021,7 @@ module.exports = {
   buildRoleIncomeContainer,
   buildHistoryContainer,
   buildAchievementsContainer,
+  buildCooldownsContainer,
   buildPortalRatesContainer,
   buildOwnerPanelContainer,
   buildEventWheelContainer,

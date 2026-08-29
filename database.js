@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.2 ULTRA — database.js
+ *  XERION v2.0.4 ULTRA — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -918,4 +918,5 @@ module.exports = {
   collectRoleIncome,
   resetUserData,
   getRecentAwards,
+  ROLE_INCOME_COLUMNS,
 };

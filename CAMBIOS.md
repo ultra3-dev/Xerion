@@ -1,3 +1,24 @@
+# Xerion v2.0.4 ULTRA — Qué cambió (arreglos reales de la v2.0.2)
+
+La v2.0.2 se probó leyendo el código y con requires/sintaxis, pero no ejecutando cada flujo con datos reales — por eso se colaron estos bugs. Para esta versión, cada arreglo de abajo se confirmó corriendo el código de verdad (no solo revisándolo), incluyendo un barrido que construye los ~30 paneles del bot con datos de prueba y busca literalmente "NaN"/"undefined" en el texto que arman.
+
+## 🔴 El bug grande: 3 constantes de portal se leían mal, y explican todo lo que reportaste
+
+En `config.js`, `PORTAL_SPAWN_CHANCE`, `PORTAL_CHECK_INTERVAL_MS` y `PORTAL_JOIN_WINDOW_MS` viven como constantes propias — **no** dentro del objeto `CONFIG`. El código (ya desde antes de esta ronda) las leía como `CONFIG.PORTAL_SPAWN_CHANCE` etc., que siempre da `undefined`. Eso causaba, en cadena:
+
+- **La probabilidad en `/portals` salía como NaN** — `undefined * 100` es literalmente `NaN`. Confirmado y arreglado: ahora muestra el % real.
+- **El portal se cerraba solo y no dejaba entrar** — el cierre se agenda con `setTimeout(fn, undefined)`, y JavaScript trata un delay inválido como `0`. El portal se resolvía casi al instante en vez de esperar los 10 minutos reales, así que para cuando alguien completaba el modal de apuesta, ya se había cerrado. Confirmado con un test que agenda el timer de verdad: antes hubiera cerrado en ~0ms, ahora cierra a los 600000ms (10 min) exactos.
+- **El chequeo de "cada 1 hora" tampoco frenaba nada**, así que el bot intentaba tirar el dado de spawn de portal muchas más veces de lo debido.
+- Como bonus del mismo chequeo: la animación de batalla del portal le pasaba solo el color (un número) a la función de canvas en vez del tipo de portal completo — no explotaba, pero pintaba el resplandor en negro en vez del color real del rango.
+
+Las tres constantes ahora se importan correctamente y se usan sin el prefijo `CONFIG.` en los 5 lugares donde estaban mal.
+
+## `/spawn` fuera, `/cooldowns` adentro
+
+Tenías razón — con `/panel-owner` ya cubriendo forzar cofres, `/spawn` no aportaba nada que el panel no hiciera. Se lo saca del todo (la función interna que usa el panel para forzar cofres sigue intacta, solo se quitó el comando duplicado). En su lugar, `/cooldowns` (`xn cooldowns`): de un vistazo, cuándo se recarga tu `/daily` y el ingreso pasivo de cada rol que tenés ahora mismo — no tocaba ningún dato nuevo, así que es de bajo riesgo.
+
+---
+
 # Xerion v2.0.2 ULTRA — Qué cambió
 
 ## 🔴 Arreglo: la IA dejaba de responder cuando Groq retiraba un modelo

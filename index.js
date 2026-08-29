@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.2 ULTRA — index.js
+ *  XERION v2.0.4 ULTRA — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -215,6 +215,7 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><th>Command</th><th>Description</th></tr>
         <tr><td><code>/profile</code></td><td>View your Feathers, roles won, rank and win rate</td></tr>
         <tr><td><code>/inventory</code></td><td>Quick balance and item check</td></tr>
+        <tr><td><code>/cooldowns</code></td><td>See when your /daily and each role's passive income are ready</td></tr>
         <tr><td><code>/leaderboard</code></td><td>Top Feather holders on the server</td></tr>
         <tr><td><code>/rates</code></td><td>Full odds for all 3 chest tiers</td></tr>
         <tr><td><code>/portals</code></td><td>Odds and payout split for all 3 portal ranks</td></tr>
@@ -231,7 +232,6 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/streak</code></td><td>Your daily streak, and whether it shows on your nickname</td></tr>
         <tr><td><code>/ping</code> · <code>/about</code> · <code>/rules</code></td><td>Diagnostics, version and game rules</td></tr>
         <tr><td><code>@Xerion</code></td><td>Mention the bot (or reply to one of its AI messages) to chat — powered by Groq, never pings anyone</td></tr>
-        <tr><td><code>${CONFIG.PREFIX} spawn</code></td><td>Owner-only — force a chest to appear, even with one already active (max 5, one every 30s)</td></tr>
         <tr><td><code>/panel-owner</code></td><td>Owner-only — full control panel: force chests, force portals, activate/cancel a global event</td></tr>
       </table>
     </div>

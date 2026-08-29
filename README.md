@@ -1,4 +1,4 @@
-# Xerion v2.0.2 ULTRA
+# Xerion v2.0.4 ULTRA
 
 Bot de Discord (`index.js` + módulos): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Además, cada hora puede abrirse un **Portal** (apuesta con Feathers, estilo Solo Leveling) y el owner puede activar **Eventos Globales** temporales desde `/panel-owner`. Hecho con **discord.js v14 (Components V2)**, **Express**, **PostgreSQL (Neon)** y **@napi-rs/canvas**.
 
@@ -86,5 +86,5 @@ La página principal (`/`) es la web informativa — solo información sobre el 
 
 ## Comandos
 
-**Slash:** `/spawn` (solo dueño), `/panel-owner` (solo dueño — forzar cofres, forzar portales, activar/cancelar evento), `/profile [usuario]`, `/inventory`, `/leaderboard`, `/rates`, `/portals`, `/event`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/streak`, `/ping`, `/about`, `/rules`
+**Slash:** `/panel-owner` (solo dueño — forzar cofres, forzar portales, activar/cancelar evento), `/profile [usuario]`, `/inventory`, `/cooldowns`, `/leaderboard`, `/rates`, `/portals`, `/event`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/streak`, `/ping`, `/about`, `/rules`
 **Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn portales`, `xn evento` y `xn reglas`.

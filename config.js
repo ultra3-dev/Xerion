@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.2 ULTRA — config.js
+ *  XERION v2.0.4 ULTRA — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '2.0.2 ULTRA',
+  VERSION: '2.0.4 ULTRA',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.

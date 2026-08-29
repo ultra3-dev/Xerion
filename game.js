@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.2 ULTRA — game.js
+ *  XERION v2.0.4 ULTRA — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -32,6 +32,8 @@ const {
   FEATHER_EMOJI,
   SHOP_ITEMS,
   CHEST_TYPES,
+  CHEST_TYPE_LIST,
+  ROLE_PASSIVE_INCOME,
   pickChestType,
   rollReward,
   applyLuckBoost,
@@ -50,6 +52,9 @@ const {
   PORTAL_TYPE_LIST,
   pickPortalType,
   computePortalPayouts,
+  PORTAL_CHECK_INTERVAL_MS,
+  PORTAL_SPAWN_CHANCE,
+  PORTAL_JOIN_WINDOW_MS,
   EVENT_TYPES,
   EVENT_TYPE_LIST,
   pickEventType,
@@ -1011,7 +1016,7 @@ async function checkPortalSpawn(channel) {
   try {
     const lastCheck = await db.getLastPortalCheckAt();
     const msSinceCheck = lastCheck ? Date.now() - new Date(lastCheck).getTime() : Infinity;
-    if (msSinceCheck < CONFIG.PORTAL_CHECK_INTERVAL_MS) return;
+    if (msSinceCheck < PORTAL_CHECK_INTERVAL_MS) return;
 
     await db.setLastPortalCheckAt(new Date());
     if (activePortals.has(channel.id)) return; // ya hay uno abierto
@@ -1019,7 +1024,7 @@ async function checkPortalSpawn(channel) {
     const activeEvent = getCurrentEvent();
     const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
     const chanceMultiplier = eventType?.kind === 'portal_chance_multiplier' ? eventType.value : 1;
-    const effectiveChance = Math.min(1, CONFIG.PORTAL_SPAWN_CHANCE * chanceMultiplier);
+    const effectiveChance = Math.min(1, PORTAL_SPAWN_CHANCE * chanceMultiplier);
     if (Math.random() >= effectiveChance) return; // no tocó esta vez
 
     await spawnPortal(channel, null, false);
@@ -1032,7 +1037,7 @@ async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
   if (activePortals.has(channel.id)) return false;
 
   const portalType = pickPortalType(forcedTypeKey);
-  const endsAt = Date.now() + CONFIG.PORTAL_JOIN_WINDOW_MS;
+  const endsAt = Date.now() + PORTAL_JOIN_WINDOW_MS;
 
   const state = {
     channelId: channel.id,
@@ -1061,7 +1066,7 @@ async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
 
   setTimeout(() => {
     resolvePortalPhase(channel, state).catch((err) => console.error('[Xerion] Error resolviendo el portal:', err));
-  }, CONFIG.PORTAL_JOIN_WINDOW_MS);
+  }, PORTAL_JOIN_WINDOW_MS);
 
   console.log(`[Xerion] ${portalType.name} abierto en #${channel.id}${isForced ? ' (forzado por el owner)' : ''}.`);
   return true;
@@ -1154,7 +1159,7 @@ async function runPortalBattleAnimation(channel, state, participants) {
         const spinDelays = [90, 100, 115, 130, 150, 175, 205, 240, 280, 330];
         for (let i = 0; i < spinDelays.length; i++) {
           const isLast = i === spinDelays.length - 1;
-          const attachment = visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType.color, isLast ? winnerUser : null);
+          const attachment = visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType, isLast ? winnerUser : null);
           await seqMessage.edit({
             components: [visuals.buildPortalBattleContainer(state.portalType)],
             flags: MessageFlags.IsComponentsV2,
@@ -1361,19 +1366,13 @@ async function handleStreakToggle(interaction) {
 // SLASH COMMANDS — definición y registro (con limpieza de comandos viejos)
 // ============================================================================
 
-const CHEST_TYPE_CHOICES = Object.values(CHEST_TYPES).map((t) => ({ name: t.name, value: t.key }));
-
 const slashCommandDefinitions = [
-  new SlashCommandBuilder()
-    .setName('spawn')
-    .setDescription('Force a chest to appear (owner only).')
-    .addStringOption((opt) => opt.setName('tipo').setDescription('Tipo de cofre a forzar (opcional)').setRequired(false).addChoices(...CHEST_TYPE_CHOICES))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
   new SlashCommandBuilder()
     .setName('profile')
     .setDescription('View your Xerion stats.')
     .addUserOption((opt) => opt.setName('user').setDescription('Whose profile to view').setRequired(false)),
+
+  new SlashCommandBuilder().setName('cooldowns').setDescription('See when your /daily and role incomes are ready to claim.'),
 
   new SlashCommandBuilder().setName('inventory').setDescription('Quick balance and item check.'),
   new SlashCommandBuilder().setName('leaderboard').setDescription('Top Feather holders on the server.'),
@@ -1487,30 +1486,26 @@ async function restoreActiveChest(client) {
 
 // ---- handlers ----
 
-async function cmdSpawn(interaction) {
-  if (interaction.user.id !== CONFIG.OWNER_ID) {
-    return interaction.reply({ content: 'This command is owner-only.', flags: MessageFlags.Ephemeral });
-  }
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const channel = await interaction.client.channels.fetch(CONFIG.CHEST_CHANNEL_ID).catch(() => null);
-  if (!channel) return interaction.editReply('No pude encontrar el canal configurado para los cofres.');
+async function cmdCooldowns(interaction) {
+  const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+  const heldRoleKeys = getHeldRoleKeys(interaction.member);
+  const now = Date.now();
 
-  const tipo = interaction.options.getString('tipo');
-  let result;
-  try {
-    result = await tryForceSpawnChest(channel, tipo);
-  } catch (err) {
-    console.error('[Xerion] Error forzando la aparición del cofre:', err);
-    return interaction.editReply('Something went wrong spawning the chest — check the logs.');
-  }
-  if (!result.spawned) {
-    if (result.reason === 'max') {
-      return interaction.editReply(`Ya hay ${CONFIG.OWNER_FORCE_MAX_ACTIVE} cofres forzados activos (el máximo). Espera a que se resuelva alguno.`);
-    }
-    const secs = Math.ceil(result.cooldownMsLeft / 1000);
-    return interaction.editReply(`Espera ${secs}s más — solo se puede forzar un cofre cada ${CONFIG.OWNER_FORCE_COOLDOWN_MS / 1000}s.`);
-  }
-  return interaction.editReply(`✅ Chest forzado en <#${CONFIG.CHEST_CHANNEL_ID}> (${ownerForceStatus().activeCount}/${CONFIG.OWNER_FORCE_MAX_ACTIVE} activos).`);
+  const lastDaily = stats.last_daily_claim_at ? new Date(stats.last_daily_claim_at).getTime() : null;
+  const dailyReadyAt = lastDaily === null ? now : lastDaily + 24 * 60 * 60 * 1000;
+  const dailyInfo = { ready: dailyReadyAt <= now, readyAt: new Date(dailyReadyAt) };
+
+  const roleIncomeList = heldRoleKeys
+    .filter((key) => ROLE_PASSIVE_INCOME[key])
+    .map((key) => {
+      const cols = db.ROLE_INCOME_COLUMNS[key];
+      const roleType = CHEST_TYPE_LIST.flatMap((t) => t.rewardTable).find((r) => r.key === key);
+      const lastAt = cols && stats[cols.at] ? new Date(stats[cols.at]).getTime() : null;
+      const readyAt = lastAt === null ? now : lastAt + ROLE_PASSIVE_INCOME[key].intervalMs;
+      return { key, name: roleType?.label || key, emoji: roleType?.emoji || '🏅', ready: readyAt <= now, readyAt: new Date(readyAt) };
+    });
+
+  return sendV2(interaction, visuals.buildCooldownsContainer(dailyInfo, roleIncomeList));
 }
 
 async function cmdProfile(interaction) {
@@ -1747,8 +1742,8 @@ async function cmdRules(interaction) {
 
 async function handleSlashCommand(interaction) {
   switch (interaction.commandName) {
-    case 'spawn': return cmdSpawn(interaction);
     case 'profile': return cmdProfile(interaction);
+    case 'cooldowns': return cmdCooldowns(interaction);
     case 'inventory': return cmdInventory(interaction);
     case 'leaderboard': return cmdLeaderboard(interaction);
     case 'rates': return cmdRates(interaction);
@@ -1780,29 +1775,26 @@ function noPingReply(message, payload) {
   return message.reply({ ...payload, allowedMentions: { ...(payload.allowedMentions || SAFE_MENTIONS), repliedUser: false } });
 }
 
-async function prefixSpawn(message, args) {
-  if (message.author.id !== CONFIG.OWNER_ID) {
-    return noPingReply(message, { content: 'This command is owner-only.' });
-  }
-  const channel = await message.client.channels.fetch(CONFIG.CHEST_CHANNEL_ID).catch(() => null);
-  if (!channel) return noPingReply(message, { content: 'No pude encontrar el canal configurado para los cofres.' });
+async function prefixCooldowns(message) {
+  const stats = await db.getUserStats(message.author.id, identityFor(message.author));
+  const heldRoleKeys = getHeldRoleKeys(message.member);
+  const now = Date.now();
 
-  const tipo = (args[0] || '').toUpperCase();
-  let result;
-  try {
-    result = await tryForceSpawnChest(channel, tipo || null);
-  } catch (err) {
-    console.error('[Xerion] Error forzando la aparición del cofre (prefix):', err);
-    return noPingReply(message, { content: 'Something went wrong spawning the chest — check the logs.' });
-  }
-  if (!result.spawned) {
-    if (result.reason === 'max') {
-      return noPingReply(message, { content: `Ya hay ${CONFIG.OWNER_FORCE_MAX_ACTIVE} cofres forzados activos (el máximo). Espera a que se resuelva alguno.` });
-    }
-    const secs = Math.ceil(result.cooldownMsLeft / 1000);
-    return noPingReply(message, { content: `Espera ${secs}s más — solo se puede forzar un cofre cada ${CONFIG.OWNER_FORCE_COOLDOWN_MS / 1000}s.` });
-  }
-  return noPingReply(message, { content: `✅ Chest forzado en <#${CONFIG.CHEST_CHANNEL_ID}> (${ownerForceStatus().activeCount}/${CONFIG.OWNER_FORCE_MAX_ACTIVE} activos).` });
+  const lastDaily = stats.last_daily_claim_at ? new Date(stats.last_daily_claim_at).getTime() : null;
+  const dailyReadyAt = lastDaily === null ? now : lastDaily + 24 * 60 * 60 * 1000;
+  const dailyInfo = { ready: dailyReadyAt <= now, readyAt: new Date(dailyReadyAt) };
+
+  const roleIncomeList = heldRoleKeys
+    .filter((key) => ROLE_PASSIVE_INCOME[key])
+    .map((key) => {
+      const cols = db.ROLE_INCOME_COLUMNS[key];
+      const roleType = CHEST_TYPE_LIST.flatMap((t) => t.rewardTable).find((r) => r.key === key);
+      const lastAt = cols && stats[cols.at] ? new Date(stats[cols.at]).getTime() : null;
+      const readyAt = lastAt === null ? now : lastAt + ROLE_PASSIVE_INCOME[key].intervalMs;
+      return { key, name: roleType?.label || key, emoji: roleType?.emoji || '🏅', ready: readyAt <= now, readyAt: new Date(readyAt) };
+    });
+
+  return noPingReply(message, { components: [visuals.buildCooldownsContainer(dailyInfo, roleIncomeList)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixProfile(message) {
@@ -1928,8 +1920,8 @@ async function handlePrefixCommand(message) {
 
   try {
     switch (subcommand) {
-      case 'spawn': return await prefixSpawn(message, args);
       case 'profile': case 'perfil': return await prefixProfile(message);
+      case 'cooldowns': case 'cooldown': return await prefixCooldowns(message);
       case 'inv': case 'inventory': return await prefixInventory(message);
       case 'top': case 'leaderboard': return await prefixLeaderboard(message);
       case 'rates': case 'odds': return await prefixRates(message);
