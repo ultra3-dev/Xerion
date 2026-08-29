@@ -1,6 +1,6 @@
-# Xerion v1.8.1
+# Xerion v2.0.2 ULTRA
 
-Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Hecho con **discord.js v14 (Components V2)**, **Express** y **PostgreSQL (Neon)**.
+Bot de Discord (`index.js` + módulos): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Además, cada hora puede abrirse un **Portal** (apuesta con Feathers, estilo Solo Leveling) y el owner puede activar **Eventos Globales** temporales desde `/panel-owner`. Hecho con **discord.js v14 (Components V2)**, **Express**, **PostgreSQL (Neon)** y **@napi-rs/canvas**.
 
 ## Cómo funciona
 
@@ -8,6 +8,8 @@ Bot de Discord de un solo archivo (`index.js`): un cofre puede aparecer en cualq
 2. Todos pulsan **Participate**. Tienen 5 minutos.
 3. Cuando el tiempo se acaba, empieza la eliminación: uno por uno (o por lotes si hay mucha gente), narrada mensaje por mensaje, hasta que queda un solo sobreviviente.
 4. El sobreviviente pulsa **Open**: animación de ruleta con canvas y un resultado — un rol exclusivo, algo de la moneda del bot (Feathers 🐦‍🔥), o nada.
+5. Además, cada hora hay una probabilidad de que se abra un **Portal** (3 rangos: E/B/S) en su propio canal — se apuesta Feathers para entrar, el Boss va eliminando participantes, y quien sobrevive se lleva la mayor parte del pozo. El owner puede forzar uno específico desde `/panel-owner`.
+6. El owner también puede activar un **Evento Global** (10 posibles, ponderados como los roles) desde `/panel-owner` — una ruleta Canvas distinta anuncia cuál tocó, y su efecto (más suerte, más Feathers, cofres más frecuentes, etc.) dura entre 10 y 20 minutos para todo el servidor.
 
 ## 1. Crear la aplicación en Discord
 
@@ -37,13 +39,13 @@ DISCORD_TOKEN=
 CLIENT_ID=
 GUILD_ID=        # opcional, solo para pruebas — ver abajo
 DATABASE_URL=
-GROQ_API_KEY=    # opcional — activa el chat de IA y los resúmenes de eliminación con humor
-GROQ_MODEL=      # opcional, por defecto llama-3.1-8b-instant
+GROQ_API_KEY=    # opcional — activa el chat de IA (solo si le mencionás o respondés a sus mensajes)
+GROQ_MODEL=      # opcional, por defecto openai/gpt-oss-20b (reemplazo oficial de Groq desde el 16 ago 2026)
 ```
 
 `GUILD_ID` es opcional: si lo pones, los slash commands se registran al instante pero **solo en ese servidor** (ideal mientras pruebas). Sin él, el registro es global y la primera vez puede tardar hasta 1 hora en aparecer en todos los servidores.
 
-`GROQ_API_KEY` también es opcional: sin ella, el bot funciona exactamente igual, simplemente sin el chat de IA (mencionar a `@Xerion`) ni los resúmenes con humor en la ronda decisiva de cada batalla. Sacala gratis en [console.groq.com](https://console.groq.com).
+`GROQ_API_KEY` también es opcional: sin ella, el bot funciona exactamente igual, simplemente sin el chat de IA. El chat SOLO responde si lo mencionás (`@Xerion hola`) o si respondés a uno de sus propios mensajes — nunca a mensajes sueltos ni de eliminación. Groq retiró `llama-3.1-8b-instant` y `llama-3.3-70b-versatile` el 16 de agosto de 2026; si en el futuro vuelve a pasar con el modelo configurado, `ai.js` reintenta automáticamente con el modelo de respaldo antes de rendirse — revisá los logs si el chat deja de responder. Sacá tu key gratis en [console.groq.com](https://console.groq.com).
 
 Todo lo específico de tu servidor (canal del cofre, ID del dueño, IDs de los roles, probabilidades, prefijo) vive en el objeto `CONFIG` al principio de `index.js` — no en variables de entorno, para que sea fácil de editar de un vistazo.
 
@@ -79,9 +81,10 @@ La página principal (`/`) es la web informativa — solo información sobre el 
 
 - **Embeds clásicos vs. Components V2:** Discord no permite mezclar embeds con Components V2 en un mismo mensaje. El flujo del cofre (aparición, eliminación, apertura) usa embeds clásicos + botones porque se edita muchas veces en poco tiempo y es más predecible. Los paneles de información (`/profile`, `/leaderboard`, `/rates`, `/help`, `xn inv`) usan Components V2 real.
 - **Estado en memoria vs. base de datos:** las estadísticas de cada jugador, el contador de mensajes y los cofres activos viven en Postgres y sobreviven a reinicios. El bot reconstruye la partida por canal y continúa la fase pendiente sin borrar el progreso.
-- **Canvas:** la animación de apertura dibuja solo formas, degradados y texto — nunca emojis dentro de la imagen. Los emojis siempre los pone Discord de forma nativa en el texto de los mensajes, así nunca salen "bugueados". Si el motor de canvas llegara a fallar en tu entorno por lo que sea, el bot lo detecta y sigue con un resultado en texto en vez de romper la secuencia.
+- **Canvas:** la animación de apertura dibuja solo formas, degradados y texto — nunca emojis dentro de la imagen. Los emojis siempre los pone Discord de forma nativa en el texto de los mensajes (o se cargan como imagen PNG desde Twemoji para los que sí van dentro del canvas, como los iconos de rol y de evento), así nunca salen "bugueados". Si el motor de canvas llegara a fallar en tu entorno por lo que sea, el bot lo detecta y sigue con un resultado en texto en vez de romper la secuencia.
+- **Eventos globales:** cada uno tiene un multiplicador moderado (1.5x–2x, nunca más) y dura 10–20 minutos, a propósito — la idea es un empujón temporal, no romper la rareza de los roles. Se eligen con una ruleta ponderada igual que un rol de cofre (ver `EVENT_TYPES` en `config.js`), y un solo evento puede estar activo a la vez.
 
 ## Comandos
 
-**Slash:** `/spawn` (solo dueño), `/profile [usuario]`, `/inventory`, `/leaderboard`, `/rates`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/rank`, `/rewards`, `/streak`, `/ping`, `/about`, `/rules`
-**Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn rango` y `xn reglas`.
+**Slash:** `/spawn` (solo dueño), `/panel-owner` (solo dueño — forzar cofres, forzar portales, activar/cancelar evento), `/profile [usuario]`, `/inventory`, `/leaderboard`, `/rates`, `/portals`, `/event`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/streak`, `/ping`, `/about`, `/rules`
+**Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn portales`, `xn evento` y `xn reglas`.

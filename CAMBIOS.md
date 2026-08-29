@@ -1,4 +1,55 @@
-# Xerion v1.9.3 — Qué cambió
+# Xerion v2.0.2 ULTRA — Qué cambió
+
+## 🔴 Arreglo: la IA dejaba de responder cuando Groq retiraba un modelo
+
+- Confirmado: Groq retiró `llama-3.1-8b-instant` **y** `llama-3.3-70b-versatile` el 16 de agosto de 2026 (lo del "16" era correcto). El modelo que ya tenías configurado (`openai/gpt-oss-20b`) es justamente el reemplazo oficial y sigue activo — no estaba roto.
+- Por las dudas de que esto vuelva a pasar (o de que `GROQ_MODEL` quede apuntando a algo viejo en Render), `ai.js` ahora reintenta automáticamente una vez con un modelo de respaldo fijo si detecta que el modelo configurado fue descontinuado, y loguea el error real de Groq (no solo el código HTTP) para que se pueda diagnosticar sin adivinar.
+
+## Sistema de Eventos Globales (nuevo, completo)
+
+- **10 eventos**, elegidos con una ruleta ponderada — mismo mecanismo que un rol de cofre — para que la probabilidad de cada uno sea real y no se pueda romper la economía: Suerte Ancestral 🍀, Lluvia de Plumas 🐦‍🔥, Vacío Debilitado 💨, Portales Inestables 🌀, Cofres Abundantes 🩶, Presagio del Abismo 🌑, Racha Bendecida 🔥, Ingreso Real 👑, Mercado Generoso 🛒 y Portal Dorado 🔴.
+- Un evento a la vez, dura entre 10 y 20 minutos, y sus multiplicadores son moderados a propósito (1.5x–2x) — un empujón, no un atajo.
+- **Ruleta en Canvas totalmente nueva y distinta** a las otras dos del bot: un círculo real dividido en 10 gajos de color (como una ruleta de casino), con un puntero fijo y el gajo ganador resaltado — nada de reciclar el diseño de cofres ni el de portales.
+- Todo cofre que aparezca mientras el evento está activo muestra el aviso en su propio embed ("🎉 Evento activo: ..."), la tienda muestra el precio tachado si hay descuento, y `/event` (`xn event`) deja ver en cualquier momento si hay uno activo y cuánto le queda.
+- Se activa (aleatorio o forzado) y se cancela desde `/panel-owner` — ver abajo.
+- Persiste igual que los cofres y portales: si el bot se reinicia a mitad de un evento, lo retoma exacto (o lo limpia solo si ya había vencido mientras estuvo caído) — nunca se pierde ni se reinicia nada.
+
+## `/panel-owner` (nuevo — la pieza que quedó pendiente en la v1.9.3)
+
+- Panel Ephemeral Components V2 único para el owner: forzar cualquier tipo de cofre, forzar cualquier rango de portal, y activar/cancelar un evento global — todo desde el mismo mensaje, que se actualiza solo después de cada acción.
+- `/spawn` se mantiene tal cual para no romper nada que ya tuvieras automatizado, pero `/panel-owner` es ahora el centro de control completo.
+
+## Portales: ya estaban, ahora conectados
+
+- El motor de portales (3 rangos, apuesta con modal, Boss eliminando gente, reparto real por cuánto apostó cada uno) ya estaba completo desde la v1.9.3 — lo que faltaba era conectarlo al panel del owner y avisar que existía. Ambas cosas, resueltas: `/panel-owner` fuerza portales, y `/portals` (`xn portals`) muestra las probabilidades y el reparto de los 3 rangos en cualquier momento.
+
+## Limpieza de comandos
+
+- **Fuera:** `/rank` y `/rewards` — el primero ya estaba casi entero duplicado en `/profile` (se le sumó ahí la única parte que le faltaba: cuánto te falta para subir un puesto); el segundo era un resumen más corto de lo que `/rates` ya muestra completo.
+- **Nuevos:** `/portals`, `/event`, `/panel-owner`.
+- Con esto el bot queda en 7 archivos (antes 5 — se sumó `admin-panel.js` para el panel nuevo) y 21 comandos — bien por debajo del nuevo techo de 15 archivos / 39 comandos: se prefirió sumar lo que de verdad suma en vez de rellenar hasta el número.
+
+## Tienda: techo de 5 items, ahora explícito
+
+- Ya estaba en exactamente 5 (Escudo, Amuleto, Pluma Fénix, Amuleto contra el Vacío, Acelerador Temporal) — coincidía con el máximo de 5 botones por fila de Discord, pero era casualidad, no una regla. Ahora es una constante (`SHOP_MAX_ITEMS`) que además avisa fuerte en el arranque si algún día se agrega un sexto por error.
+
+## Ya estaba resuelto (verificado de nuevo en esta pasada, sin tocar)
+
+Revisando el código a fondo para esta actualización, esto ya estaba andando bien desde antes y no hizo falta arreglarlo:
+
+- Los beneficios de rol (`/claim`, logros, income pasivo) se calculan contra los roles reales de Discord del usuario en este momento, no contra el historial — si se te quita el rol, se te corta el beneficio al instante.
+- Las probabilidades de rol de los 3 tipos de cofre suman exactamente 100% cada una.
+- Los botones de `/leaderboard` (y los de tienda, notificaciones y racha) ya estaban bloqueados a quien los pidió — otra persona que los toque recibe un aviso, no puede usarlos.
+- La IA solo responde a un `@Xerion` explícito o a una respuesta directa a uno de sus propios mensajes — nunca a mensajes de eliminación ni a `@everyone`/`@here`.
+- Nada del estado del bot (cofres activos, portales activos, y ahora también eventos) se pierde ni se reinicia si el bot se reinicia — todo vive en Postgres.
+
+## Pendiente de tu parte
+
+- **DNS/dominio para la verificación de Render:** no llegó ninguna imagen en el mensaje, así que no se tocó nada de esto — mandá la captura y se resuelve puntual.
+
+---
+
+
 
 ## Sistema de Portales (nuevo, completo)
 

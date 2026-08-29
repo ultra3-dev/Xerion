@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — database.js
+ *  XERION v2.0.2 ULTRA — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -82,6 +82,11 @@ const XERION_STATE_COLUMNS = [
   ['active_chest', 'JSONB'],
   ['active_chest_updated_at', 'TIMESTAMPTZ'],
   ['last_portal_check_at', 'TIMESTAMPTZ'],
+  // Evento global activo (ver EVENT_TYPES en config.js) — igual que
+  // last_portal_check_at, vive en la fila única de xerion_state para que un
+  // reinicio del bot nunca lo pierda ni lo reinicie a mitad de camino.
+  ['active_event_key', 'TEXT'],
+  ['active_event_ends_at', 'TIMESTAMPTZ'],
 ];
 
 /**
@@ -564,6 +569,27 @@ async function payoutPortalResults(payouts) {
   }
 }
 
+// ============================================================================
+// EVENTOS GLOBALES — un solo evento activo a la vez, para todo el servidor.
+// Mismo patrón que last_portal_check_at: una sola fila en xerion_state.
+// ============================================================================
+
+/** Devuelve { key, endsAt } del evento activo, o null si no hay ninguno guardado. */
+async function getActiveEvent() {
+  const { rows } = await pool.query(`SELECT active_event_key, active_event_ends_at FROM xerion_state WHERE id = 1;`);
+  const row = rows[0];
+  if (!row?.active_event_key) return null;
+  return { key: row.active_event_key, endsAt: row.active_event_ends_at };
+}
+
+async function setActiveEvent(key, endsAt) {
+  await pool.query(`UPDATE xerion_state SET active_event_key = $1, active_event_ends_at = $2 WHERE id = 1;`, [key, endsAt]);
+}
+
+async function clearActiveEvent() {
+  await pool.query(`UPDATE xerion_state SET active_event_key = NULL, active_event_ends_at = NULL WHERE id = 1;`);
+}
+
 async function getServerStats(channelId = CONFIG.CHEST_CHANNEL_ID) {
   const state = await getState(channelId);
   const { rows } = await pool.query(
@@ -634,24 +660,24 @@ async function buyShopItem(userId, column, cost) {
   return rows[0] || null; // null = no tenía suficientes feathers
 }
 
-async function buyShield(userId) {
-  return buyShopItem(userId, 'shields', SHOP_ITEMS.SHIELD.cost);
+async function buyShield(userId, cost = SHOP_ITEMS.SHIELD.cost) {
+  return buyShopItem(userId, 'shields', cost);
 }
 
-async function buyCharm(userId) {
-  return buyShopItem(userId, 'luck_charms', SHOP_ITEMS.CHARM.cost);
+async function buyCharm(userId, cost = SHOP_ITEMS.CHARM.cost) {
+  return buyShopItem(userId, 'luck_charms', cost);
 }
 
-async function buyRevive(userId) {
-  return buyShopItem(userId, 'revives', SHOP_ITEMS.REVIVE.cost);
+async function buyRevive(userId, cost = SHOP_ITEMS.REVIVE.cost) {
+  return buyShopItem(userId, 'revives', cost);
 }
 
-async function buyVoidWard(userId) {
-  return buyShopItem(userId, 'void_wards', SHOP_ITEMS.WARD.cost);
+async function buyVoidWard(userId, cost = SHOP_ITEMS.WARD.cost) {
+  return buyShopItem(userId, 'void_wards', cost);
 }
 
-async function buyTimeSkip(userId) {
-  return buyShopItem(userId, 'time_skips', SHOP_ITEMS.TIME_SKIP.cost);
+async function buyTimeSkip(userId, cost = SHOP_ITEMS.TIME_SKIP.cost) {
+  return buyShopItem(userId, 'time_skips', cost);
 }
 
 /** Consume un Amuleto contra el Vacío si tiene uno disponible. Devuelve true si se consumió (y por lo tanto aplica). */
@@ -713,10 +739,10 @@ async function consumeLuckCharmIfAvailable(userId) {
  * - Si no (o es el primer claim de todos), la racha se reinicia a 1.
  * El cooldown de 24h para poder reclamar de nuevo no cambia.
  */
-async function claimDaily(userId, identity = {}, heldRoleKeys = []) {
+async function claimDaily(userId, identity = {}, heldRoleKeys = [], eventMultiplier = 1) {
   await ensureUser(userId, identity);
   const { rows: bonusRows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
-  const dailyReward = Math.round(25 * totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {}));
+  const dailyReward = Math.round(25 * totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {}) * eventMultiplier);
   const { rows } = await pool.query(
     `UPDATE xerion_users
      SET feathers = feathers + $2,
@@ -761,7 +787,7 @@ async function setStreakVisible(userId, visible) {
  * (no se acumulan periodos atrasados) — así el sistema sigue siendo justo
  * y difícil, sin premiar a quien se desconecta mucho tiempo.
  */
-async function collectRoleIncome(userId, heldRoleKeys = []) {
+async function collectRoleIncome(userId, heldRoleKeys = [], eventMultiplier = 1) {
   await ensureUser(userId);
   const { rows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
   const row = rows[0];
@@ -775,7 +801,8 @@ async function collectRoleIncome(userId, heldRoleKeys = []) {
 
   for (const [key, cols] of Object.entries(ROLE_INCOME_COLUMNS)) {
     if (!heldRoleKeys.includes(key)) continue; // ya no tiene el rol AHORA — sin ingreso, tenga o no historial
-    const { intervalMs, amount } = ROLE_PASSIVE_INCOME[key];
+    const { intervalMs, amount: baseAmount } = ROLE_PASSIVE_INCOME[key];
+    const amount = Math.round(baseAmount * eventMultiplier);
     const lastAt = row[cols.at] ? new Date(row[cols.at]).getTime() : null;
     if (lastAt === null || now - lastAt >= intervalMs) {
       claimed.push({ key, amount });
@@ -864,6 +891,9 @@ module.exports = {
   getActivePortals,
   getLastPortalCheckAt,
   setLastPortalCheckAt,
+  getActiveEvent,
+  setActiveEvent,
+  clearActiveEvent,
   stakePortalEntry,
   refundPortalEntry,
   payoutPortalResults,

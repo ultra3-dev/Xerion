@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — game.js
+ *  XERION v2.0.2 ULTRA — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -47,13 +47,19 @@ const {
   SAFE_MENTIONS,
   pingOnly,
   PORTAL_TYPES,
+  PORTAL_TYPE_LIST,
   pickPortalType,
   computePortalPayouts,
+  EVENT_TYPES,
+  EVENT_TYPE_LIST,
+  pickEventType,
+  applyPartialVoidReduction,
 } = require('./config.js');
 
 const db = require('./database.js');
 const ai = require('./ai.js');
 const visuals = require('./visuals.js');
+const adminPanel = require('./admin-panel.js');
 
 // ============================================================================
 // ESTADO DE PARTIDA (en memoria) — un cofre activo como máximo por canal.
@@ -252,12 +258,17 @@ function releaseForceSlot(state) {
 }
 
 async function spawnChest(channel, forcedTypeKey, mapKey = channel.id, isForced = false) {
-  const chestType = pickChestType(forcedTypeKey);
+  const activeEvent = getCurrentEvent();
+  const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const weightMultipliers = eventType?.kind === 'chest_weight_shift' ? eventType.value : null;
+  const stepMessages = getEffectiveStepMessages();
+
+  const chestType = pickChestType(forcedTypeKey, weightMultipliers);
   const previousState = await db.recordChestSpawn(channel.id); // el contador de mensajes es del canal real, no del slot
 
   const endsAt = Date.now() + CONFIG.JOIN_WINDOW_MS;
   const message = await channel.send({
-    components: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState, mapKey })],
+    components: [visuals.buildChestEmbed({ chestType, participantCount: 0, endsAt, serverStats: previousState, mapKey, activeEvent, stepMessages })],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: SAFE_MENTIONS,
   });
@@ -317,8 +328,10 @@ async function notifyChestSpawn(client, chestType, chestMessage) {
 function scheduleParticipantCountUpdate(state, message) {
   if (state.status !== 'waiting') return;
   db.getState(state.channelId)
-    .then((channelStats) =>
-      message.edit({
+    .then((channelStats) => {
+      const activeEvent = getCurrentEvent();
+      const stepMessages = getEffectiveStepMessages();
+      return message.edit({
         components: [
           visuals.buildChestEmbed({
             chestType: state.chestType,
@@ -326,12 +339,14 @@ function scheduleParticipantCountUpdate(state, message) {
             endsAt: state.endsAt,
             serverStats: channelStats,
             mapKey: state.mapKey,
+            activeEvent,
+            stepMessages,
           }),
         ],
         flags: MessageFlags.IsComponentsV2,
         allowedMentions: SAFE_MENTIONS,
-      }),
-    )
+      });
+    })
     .catch(() => {});
 }
 
@@ -671,6 +686,13 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
     if (reward.kind === 'currency') reward.amount = state.rewardAmount;
   } else {
     let table = chestType.rewardTable;
+    const activeEvent = getCurrentEvent();
+    const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+    // Los modificadores del evento (si hay uno activo) se aplican a TODOS —
+    // antes de mirar si además tiene un Amuleto propio, para que ambos se
+    // sumen en vez de pisarse.
+    if (eventType?.kind === 'luck_multiplier') table = applyLuckBoost(table, eventType.value);
+    if (eventType?.kind === 'nothing_multiplier') table = applyPartialVoidReduction(table, eventType.value);
     try {
       luckBoosted = await db.consumeLuckCharmIfAvailable(winnerId);
       if (luckBoosted) table = applyLuckBoost(table);
@@ -685,7 +707,11 @@ async function openChestSequence(channel, winnerId, chestType, state = null) {
     }
 
     reward = rollReward(table);
-    if (reward.kind === 'currency') reward = { ...reward, amount: rollFeatherAmount(reward) };
+    if (reward.kind === 'currency') {
+      let amount = rollFeatherAmount(reward);
+      if (eventType?.kind === 'feather_multiplier') amount = Math.round(amount * eventType.value);
+      reward = { ...reward, amount };
+    }
     if (state) {
       state.reward = reward;
       state.luckBoosted = luckBoosted;
@@ -790,6 +816,167 @@ async function handleOpenChest(interaction) {
 }
 
 // ============================================================================
+// EVENTOS GLOBALES — un evento a la vez, para todo el servidor. Se activa
+// desde /panel-owner con una ruleta ponderada (mismo mecanismo que un rol
+// de cofre — ver pickEventType en config.js). Se cachea en memoria para no
+// pegarle a la base de datos en cada roll, pero SIEMPRE se persiste primero
+// en xerion_state, así que un reinicio a mitad de un evento lo recupera
+// exacto (o lo limpia en silencio si venció mientras el bot estaba caído) —
+// ver restoreEvent(), llamado una vez al boot desde index.js.
+// ============================================================================
+
+let cachedEvent = null; // { key, endsAt } | null
+let eventExpiryTimer = null;
+
+/** Evento activo ahora mismo, o null. Nunca lanza. */
+function getCurrentEvent() {
+  if (!cachedEvent) return null;
+  if (new Date(cachedEvent.endsAt).getTime() <= Date.now()) return null; // vencido pero el timer todavía no corrió — se trata como inactivo igual
+  return cachedEvent;
+}
+
+function clearEventTimer() {
+  if (eventExpiryTimer) {
+    clearTimeout(eventExpiryTimer);
+    eventExpiryTimer = null;
+  }
+}
+
+/** Avisa en el canal de cofres que el evento terminó. Nunca rompe nada si el canal ya no es accesible. */
+async function announceEventEnd(client, eventKey) {
+  const type = EVENT_TYPES[eventKey];
+  if (!type) return;
+  try {
+    const channel = await client.channels.fetch(CONFIG.CHEST_CHANNEL_ID);
+    await channel.send({ components: [visuals.buildEventEndedContainer(type)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  } catch (err) {
+    console.error('[Xerion] No se pudo anunciar el fin del evento (no afecta nada más):', err.message);
+  }
+}
+
+async function deactivateEvent(client, { announce = true } = {}) {
+  const wasActive = cachedEvent;
+  clearEventTimer();
+  cachedEvent = null;
+  await db.clearActiveEvent().catch((err) => console.error('[Xerion] Error limpiando el evento activo:', err.message));
+  if (wasActive && announce && client) {
+    announceEventEnd(client, wasActive.key).catch(() => {});
+  }
+}
+
+function scheduleEventExpiry(client, endsAt) {
+  clearEventTimer();
+  const msLeft = Math.max(0, new Date(endsAt).getTime() - Date.now());
+  eventExpiryTimer = setTimeout(() => {
+    deactivateEvent(client, { announce: true }).catch((err) => console.error('[Xerion] Error desactivando el evento vencido:', err));
+  }, msLeft);
+}
+
+/**
+ * Activa un evento (ponderado al azar, o forzado si se pasa forcedKey) y lo
+ * anuncia con la ruleta Canvas en el canal de cofres. Si sale "Portal
+ * Dorado", además intenta abrir de inmediato un Portal Rango-S (si no hay
+ * uno activo ya) — para ese evento en particular, el impacto es instantáneo
+ * en vez de depender de que el chequeo horario coincida con la ventana.
+ */
+async function activateEvent(channel, forcedKey = null) {
+  const type = pickEventType(forcedKey);
+  const endsAt = new Date(Date.now() + type.durationMs);
+
+  await db.setActiveEvent(type.key, endsAt);
+  cachedEvent = { key: type.key, endsAt };
+  scheduleEventExpiry(channel.client, endsAt);
+
+  try {
+    const iconMap = await visuals.preloadEventIcons().catch(() => null);
+    const wheelMessage = await channel.send({
+      components: [visuals.buildEventWheelContainer()],
+      flags: MessageFlags.IsComponentsV2,
+      files: [visuals.eventWheelFrameAttachment(null, iconMap)],
+      allowedMentions: SAFE_MENTIONS,
+    });
+    const spinDelays = [90, 100, 115, 130, 150, 175, 205, 240, 280, 330];
+    for (const delay of spinDelays) {
+      await sleep(delay);
+      await wheelMessage
+        .edit({ components: [visuals.buildEventWheelContainer()], flags: MessageFlags.IsComponentsV2, files: [visuals.eventWheelFrameAttachment(null, iconMap)], attachments: [] })
+        .catch(() => {});
+    }
+    await sleep(200);
+    await wheelMessage
+      .edit({ components: [visuals.buildEventWheelContainer()], flags: MessageFlags.IsComponentsV2, files: [visuals.eventWheelFrameAttachment(type.key, iconMap)], attachments: [] })
+      .catch(() => {});
+    await sleep(900);
+    await wheelMessage
+      .edit({ components: [visuals.buildEventResultContainer(type, endsAt.getTime())], flags: MessageFlags.IsComponentsV2, files: [], attachments: [] })
+      .catch(() => {});
+  } catch (err) {
+    console.error('[Xerion] El canvas de la ruleta de eventos falló, se degrada a solo el anuncio:', err);
+    await channel.send({ components: [visuals.buildEventResultContainer(type, endsAt.getTime())], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS }).catch(() => {});
+  }
+
+  if (type.kind === 'force_portal_rank' && !activePortals.has(channel.id)) {
+    spawnPortal(channel, type.value, true).catch((err) => console.error('[Xerion] Error abriendo el Portal Dorado:', err));
+  }
+
+  return type;
+}
+
+/** Llamado una vez al boot (desde index.js) para recuperar un evento que ya estaba activo antes del reinicio. */
+async function restoreEvent(client) {
+  try {
+    const saved = await db.getActiveEvent();
+    if (!saved) return;
+    if (new Date(saved.endsAt).getTime() <= Date.now()) {
+      await db.clearActiveEvent(); // venció mientras el bot estaba caído — se limpia en silencio, sin anuncio de cierre
+      return;
+    }
+    cachedEvent = saved;
+    scheduleEventExpiry(client, saved.endsAt);
+    console.log(`[Xerion] Evento "${saved.key}" restaurado — sigue activo hasta ${new Date(saved.endsAt).toISOString()}.`);
+  } catch (err) {
+    console.error('[Xerion] Error restaurando el evento activo:', err);
+  }
+}
+
+/** Wrapper fino sobre spawnPortal para /panel-owner: devuelve boolean en vez de lanzar, y nunca persiste nada distinto de lo que ya hace spawnPortal. */
+async function forcePortalSpawn(channel, forcedTypeKey = null) {
+  return spawnPortal(channel, forcedTypeKey, true);
+}
+
+/** Arma el objeto de estado en vivo que necesita el panel del owner para re-renderizarse tras cada acción. */
+async function getOwnerPanelStatus() {
+  const { activeCount, cooldownMsLeft } = ownerForceStatus();
+  const portalState = activePortals.get(CONFIG.PORTAL_CHANNEL_ID);
+  return {
+    chestCooldownActive: cooldownMsLeft > 0,
+    activeChestCount: activeCount,
+    portalActive: Boolean(portalState),
+    portalTypeLabel: portalState?.portalType?.name || '',
+    activeEvent: getCurrentEvent(),
+  };
+}
+
+/** Mensajes-por-+1% efectivos ahora mismo — reducidos si "Cofres Abundantes" está activo, si no el valor normal de siempre. */
+function getEffectiveStepMessages() {
+  const activeEvent = getCurrentEvent();
+  const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  return eventType?.kind === 'spawn_step_multiplier' ? Math.max(1, Math.round(CONFIG.PROBABILITY_STEP_MESSAGES * eventType.value)) : CONFIG.PROBABILITY_STEP_MESSAGES;
+}
+
+/** El objeto que game.js le pasa a admin-panel.js en cada interacción — así admin-panel.js nunca necesita importar game.js (evita una dependencia circular). */
+function buildAdminGameApi() {
+  return {
+    tryForceSpawnChest,
+    forcePortalSpawn,
+    getCurrentEvent,
+    activateEvent,
+    deactivateEvent,
+    getOwnerPanelStatus,
+  };
+}
+
+// ============================================================================
 // PORTALES — apuesta estilo "gate" (Solo Leveling). Un portal por canal a
 // la vez. Sigue el mismo espíritu defensivo que los cofres: cualquier paso
 // que falle se loguea y se degrada sin romper el resto del bot.
@@ -828,7 +1015,12 @@ async function checkPortalSpawn(channel) {
 
     await db.setLastPortalCheckAt(new Date());
     if (activePortals.has(channel.id)) return; // ya hay uno abierto
-    if (Math.random() >= CONFIG.PORTAL_SPAWN_CHANCE) return; // no tocó esta vez
+
+    const activeEvent = getCurrentEvent();
+    const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+    const chanceMultiplier = eventType?.kind === 'portal_chance_multiplier' ? eventType.value : 1;
+    const effectiveChance = Math.min(1, CONFIG.PORTAL_SPAWN_CHANCE * chanceMultiplier);
+    if (Math.random() >= effectiveChance) return; // no tocó esta vez
 
     await spawnPortal(channel, null, false);
   } catch (err) {
@@ -855,7 +1047,7 @@ async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
 
   try {
     const message = await channel.send({
-      components: [visuals.buildPortalEmbed({ portalType, participants: [], pot: 0, endsAt })],
+      components: [visuals.buildPortalEmbed({ portalType, participants: [], pot: 0, endsAt, activeEvent: getCurrentEvent() })],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: SAFE_MENTIONS,
     });
@@ -881,7 +1073,7 @@ function schedulePortalCountUpdate(state, message) {
   const pot = participants.reduce((sum, p) => sum + p.stake, 0);
   message
     .edit({
-      components: [visuals.buildPortalEmbed({ portalType: state.portalType, participants, pot, endsAt: state.endsAt })],
+      components: [visuals.buildPortalEmbed({ portalType: state.portalType, participants, pot, endsAt: state.endsAt, activeEvent: getCurrentEvent() })],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: SAFE_MENTIONS,
     })
@@ -1101,12 +1293,15 @@ async function handleShopBuy(interaction, itemKey) {
   }
 
   const item = SHOP_ITEMS[itemKey];
+  const activeEvent = getCurrentEvent();
+  const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const cost = eventType?.kind === 'shop_discount' ? Math.max(1, Math.round(item.cost * eventType.value)) : item.cost;
   const BUY_FUNCTIONS = { SHIELD: db.buyShield, CHARM: db.buyCharm, REVIVE: db.buyRevive, WARD: db.buyVoidWard, TIME_SKIP: db.buyTimeSkip };
   const buyFn = BUY_FUNCTIONS[itemKey];
 
   let result;
   try {
-    result = await buyFn(interaction.user.id);
+    result = await buyFn(interaction.user.id, cost);
   } catch (err) {
     console.error('[Xerion] Error procesando compra en la tienda:', err);
     return interaction.reply({ content: 'Something went wrong with that purchase — try again in a moment.', flags: MessageFlags.Ephemeral });
@@ -1114,12 +1309,12 @@ async function handleShopBuy(interaction, itemKey) {
 
   if (!result) {
     return interaction.reply({
-      content: `No te alcanzan las Feathers para comprar ${item.emoji} **${item.name}** (cuesta \`${item.cost}\`).`,
+      content: `No te alcanzan las Feathers para comprar ${item.emoji} **${item.name}** (cuesta \`${cost}\`).`,
       flags: MessageFlags.Ephemeral,
     });
   }
 
-  await interaction.update({ components: [visuals.buildShopContainer(result, ownerId)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  await interaction.update({ components: [visuals.buildShopContainer(result, ownerId, activeEvent)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   await interaction.followUp({ content: `✅ Compraste ${item.emoji} **${item.name}**.`, flags: MessageFlags.Ephemeral }).catch(() => {});
 }
 
@@ -1183,6 +1378,8 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('inventory').setDescription('Quick balance and item check.'),
   new SlashCommandBuilder().setName('leaderboard').setDescription('Top Feather holders on the server.'),
   new SlashCommandBuilder().setName('rates').setDescription('See the chest reward odds for all 3 chest tiers.'),
+  new SlashCommandBuilder().setName('portals').setDescription('See the odds and payout split for all 3 portal ranks.'),
+  new SlashCommandBuilder().setName('event').setDescription('See the active global event, if any.'),
   new SlashCommandBuilder().setName('shop').setDescription('Spend your Feathers on Shields and Luck Charms.'),
   new SlashCommandBuilder().setName('notification').setDescription('Toggle DM alerts for when a chest appears.'),
   new SlashCommandBuilder().setName('stats').setDescription('Server-wide Xerion stats.'),
@@ -1192,12 +1389,11 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('claim').setDescription('Collect passive Feathers earned by the roles you own.'),
   new SlashCommandBuilder().setName('history').setDescription('View your latest chest rewards.'),
   new SlashCommandBuilder().setName('achievements').setDescription('View your Xerion achievements.'),
-  new SlashCommandBuilder().setName('rank').setDescription('View your rank and next milestone.'),
-  new SlashCommandBuilder().setName('rewards').setDescription('See a compact reward summary.'),
   new SlashCommandBuilder().setName('streak').setDescription('View your Xerion activity.'),
   new SlashCommandBuilder().setName('ping').setDescription('Check Xerion latency.'),
   new SlashCommandBuilder().setName('about').setDescription('About Xerion and its current version.'),
   new SlashCommandBuilder().setName('rules').setDescription('Read the quick game rules.'),
+  adminPanel.commandDefinition,
 ].map((cmd) => cmd.toJSON());
 
 /**
@@ -1365,7 +1561,7 @@ async function cmdShop(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     const counts = await db.getShopCounts(interaction.user.id);
-    await interaction.editReply({ components: [visuals.buildShopContainer(counts, interaction.user.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
+    await interaction.editReply({ components: [visuals.buildShopContainer(counts, interaction.user.id, getCurrentEvent())], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /shop:', err);
     await interaction.editReply('Could not load the shop right now — try again in a moment.');
@@ -1387,7 +1583,7 @@ async function cmdStats(interaction) {
   await interaction.deferReply();
   try {
     const serverStats = await db.getServerStats();
-    await interaction.editReply({ components: [visuals.buildStatsContainer(serverStats)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    await interaction.editReply({ components: [visuals.buildStatsContainer(serverStats, getEffectiveStepMessages())], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /stats:', err);
     await interaction.editReply('Could not load server stats right now — try again in a moment.');
@@ -1492,11 +1688,14 @@ async function sendV2(interaction, container, ephemeral = false) {
 async function cmdChest(interaction) {
   const channelId = CONFIG.CHEST_CHANNEL_ID;
   const state = await db.getServerStats(channelId);
-  return sendV2(interaction, visuals.buildChestStatusContainer(channelId, state, activeChests.get(channelId)));
+  return sendV2(interaction, visuals.buildChestStatusContainer(channelId, state, activeChests.get(channelId), getEffectiveStepMessages()));
 }
 
 async function cmdDaily(interaction) {
-  const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user), getHeldRoleKeys(interaction.member));
+  const activeEvent = getCurrentEvent();
+  const type = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const multiplier = type?.kind === 'daily_multiplier' || type?.kind === 'feather_multiplier' ? type.value : 1;
+  const result = await db.claimDaily(interaction.user.id, identityFor(interaction.user), getHeldRoleKeys(interaction.member), multiplier);
   if (result.claimed && result.streak_visible !== false) {
     updateStreakNickname(interaction.member, result.current_streak).catch(() => {});
   }
@@ -1504,7 +1703,10 @@ async function cmdDaily(interaction) {
 }
 
 async function cmdClaim(interaction) {
-  const result = await db.collectRoleIncome(interaction.user.id, getHeldRoleKeys(interaction.member));
+  const activeEvent = getCurrentEvent();
+  const type = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const multiplier = type?.kind === 'role_income_multiplier' || type?.kind === 'feather_multiplier' ? type.value : 1;
+  const result = await db.collectRoleIncome(interaction.user.id, getHeldRoleKeys(interaction.member), multiplier);
   return sendV2(interaction, visuals.buildRoleIncomeContainer(result), false);
 }
 
@@ -1518,13 +1720,12 @@ async function cmdAchievements(interaction) {
   return sendV2(interaction, visuals.buildAchievementsContainer(stats, getHeldRoleKeys(interaction.member)));
 }
 
-async function cmdRank(interaction) {
-  const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-  return sendV2(interaction, visuals.buildRankContainer(stats));
+async function cmdPortals(interaction) {
+  return sendV2(interaction, visuals.buildPortalRatesContainer());
 }
 
-async function cmdRewards(interaction) {
-  return sendV2(interaction, visuals.buildRewardsContainer());
+async function cmdEvent(interaction) {
+  return sendV2(interaction, visuals.buildEventStatusContainer(getCurrentEvent()));
 }
 
 async function cmdStreak(interaction) {
@@ -1551,6 +1752,8 @@ async function handleSlashCommand(interaction) {
     case 'inventory': return cmdInventory(interaction);
     case 'leaderboard': return cmdLeaderboard(interaction);
     case 'rates': return cmdRates(interaction);
+    case 'portals': return cmdPortals(interaction);
+    case 'event': return cmdEvent(interaction);
     case 'shop': return cmdShop(interaction);
     case 'notification': return cmdNotification(interaction);
     case 'stats': return cmdStats(interaction);
@@ -1560,12 +1763,11 @@ async function handleSlashCommand(interaction) {
     case 'claim': return cmdClaim(interaction);
     case 'history': return cmdHistory(interaction);
     case 'achievements': return cmdAchievements(interaction);
-    case 'rank': return cmdRank(interaction);
-    case 'rewards': return cmdRewards(interaction);
     case 'streak': return cmdStreak(interaction);
     case 'ping': return cmdPing(interaction);
     case 'about': return cmdAbout(interaction);
     case 'rules': return cmdRules(interaction);
+    case 'panel-owner': return adminPanel.cmdPanelOwner(interaction, buildAdminGameApi());
     default: return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
   }
 }
@@ -1630,7 +1832,7 @@ async function prefixRates(message) {
 
 async function prefixShop(message) {
   const counts = await db.getShopCounts(message.author.id);
-  return noPingReply(message, { components: [visuals.buildShopContainer(counts, message.author.id)], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildShopContainer(counts, message.author.id, getCurrentEvent())], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixNotification(message) {
@@ -1647,7 +1849,7 @@ async function prefixNotification(message) {
 
 async function prefixStats(message) {
   const serverStats = await db.getServerStats();
-  return noPingReply(message, { components: [visuals.buildStatsContainer(serverStats)], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildStatsContainer(serverStats, getEffectiveStepMessages())], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixHelp(message) {
@@ -1657,13 +1859,16 @@ async function prefixHelp(message) {
 async function prefixChest(message) {
   const state = await db.getServerStats(CONFIG.CHEST_CHANNEL_ID);
   return noPingReply(message, {
-    components: [visuals.buildChestStatusContainer(CONFIG.CHEST_CHANNEL_ID, state, activeChests.get(CONFIG.CHEST_CHANNEL_ID))],
+    components: [visuals.buildChestStatusContainer(CONFIG.CHEST_CHANNEL_ID, state, activeChests.get(CONFIG.CHEST_CHANNEL_ID), getEffectiveStepMessages())],
     flags: MessageFlags.IsComponentsV2,
   });
 }
 
 async function prefixDaily(message) {
-  const result = await db.claimDaily(message.author.id, identityFor(message.author), getHeldRoleKeys(message.member));
+  const activeEvent = getCurrentEvent();
+  const type = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const multiplier = type?.kind === 'daily_multiplier' || type?.kind === 'feather_multiplier' ? type.value : 1;
+  const result = await db.claimDaily(message.author.id, identityFor(message.author), getHeldRoleKeys(message.member), multiplier);
   if (result.claimed && result.streak_visible !== false) {
     updateStreakNickname(message.member, result.current_streak).catch(() => {});
   }
@@ -1671,7 +1876,10 @@ async function prefixDaily(message) {
 }
 
 async function prefixClaim(message) {
-  const result = await db.collectRoleIncome(message.author.id, getHeldRoleKeys(message.member));
+  const activeEvent = getCurrentEvent();
+  const type = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const multiplier = type?.kind === 'role_income_multiplier' || type?.kind === 'feather_multiplier' ? type.value : 1;
+  const result = await db.collectRoleIncome(message.author.id, getHeldRoleKeys(message.member), multiplier);
   return noPingReply(message, { components: [visuals.buildRoleIncomeContainer(result)], flags: MessageFlags.IsComponentsV2 });
 }
 
@@ -1685,13 +1893,12 @@ async function prefixAchievements(message) {
   return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats, getHeldRoleKeys(message.member))], flags: MessageFlags.IsComponentsV2 });
 }
 
-async function prefixRank(message) {
-  const stats = await db.getUserStats(message.author.id, identityFor(message.author));
-  return noPingReply(message, { components: [visuals.buildRankContainer(stats)], flags: MessageFlags.IsComponentsV2 });
+async function prefixPortals(message) {
+  return noPingReply(message, { components: [visuals.buildPortalRatesContainer()], flags: MessageFlags.IsComponentsV2 });
 }
 
-async function prefixRewards(message) {
-  return noPingReply(message, { components: [visuals.buildRewardsContainer()], flags: MessageFlags.IsComponentsV2 });
+async function prefixEvent(message) {
+  return noPingReply(message, { components: [visuals.buildEventStatusContainer(getCurrentEvent())], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixStreak(message) {
@@ -1726,6 +1933,8 @@ async function handlePrefixCommand(message) {
       case 'inv': case 'inventory': return await prefixInventory(message);
       case 'top': case 'leaderboard': return await prefixLeaderboard(message);
       case 'rates': case 'odds': return await prefixRates(message);
+      case 'portals': case 'portales': return await prefixPortals(message);
+      case 'event': case 'evento': return await prefixEvent(message);
       case 'shop': case 'tienda': return await prefixShop(message);
       case 'notification': case 'notif': return await prefixNotification(message);
       case 'stats': return await prefixStats(message);
@@ -1734,8 +1943,6 @@ async function handlePrefixCommand(message) {
       case 'claim': return await prefixClaim(message);
       case 'history': case 'historial': return await prefixHistory(message);
       case 'achievements': case 'logros': return await prefixAchievements(message);
-      case 'rank': case 'rango': return await prefixRank(message);
-      case 'rewards': case 'recompensas': return await prefixRewards(message);
       case 'streak': case 'racha': return await prefixStreak(message);
       case 'ping': return await prefixPing(message);
       case 'about': case 'info': return await prefixAbout(message);
@@ -1855,6 +2062,10 @@ async function handleInteraction(interaction) {
         });
       }
       if (id.startsWith('xerion_portal_stake::')) return await handlePortalStakeButton(interaction);
+      if (adminPanel.isRelevant(id)) return await adminPanel.handleComponent(interaction, buildAdminGameApi());
+    }
+    if (interaction.isStringSelectMenu()) {
+      if (adminPanel.isRelevant(interaction.customId)) return await adminPanel.handleComponent(interaction, buildAdminGameApi());
     }
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
@@ -1887,6 +2098,7 @@ module.exports = {
   clearAndRegisterSlashCommands,
   restoreActiveChest,
   restorePortals,
+  restoreEvent,
   checkPortalSpawn,
   spawnPortal,
 };

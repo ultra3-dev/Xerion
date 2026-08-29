@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — index.js
+ *  XERION v2.0.2 ULTRA — index.js
  * ----------------------------------------------------------------------------
  *  Punto de entrada. Junta los otros 4 archivos (config.js, database.js,
  *  visuals.js, game.js), levanta el cliente de Discord, la página
@@ -217,7 +217,9 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/inventory</code></td><td>Quick balance and item check</td></tr>
         <tr><td><code>/leaderboard</code></td><td>Top Feather holders on the server</td></tr>
         <tr><td><code>/rates</code></td><td>Full odds for all 3 chest tiers</td></tr>
-        <tr><td><code>/shop</code></td><td>Spend Feathers on Shields, Luck Charms and Phoenix Feathers</td></tr>
+        <tr><td><code>/portals</code></td><td>Odds and payout split for all 3 portal ranks</td></tr>
+        <tr><td><code>/event</code></td><td>See the active global event, if any</td></tr>
+        <tr><td><code>/shop</code></td><td>Spend Feathers on Shields, Luck Charms and Phoenix Feathers (max 5 items)</td></tr>
         <tr><td><code>/notification</code></td><td>Toggle a DM alert for when a chest appears</td></tr>
         <tr><td><code>/stats</code></td><td>Server-wide Xerion stats</td></tr>
         <tr><td><code>/help</code></td><td>List every command</td></tr>
@@ -226,11 +228,11 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/claim</code></td><td>Collect passive Feathers earned by the roles you own</td></tr>
         <tr><td><code>/history</code></td><td>Review your latest rewards</td></tr>
         <tr><td><code>/achievements</code></td><td>Track permanent Xerion milestones</td></tr>
-        <tr><td><code>/rank</code> · <code>/rewards</code></td><td>See progress and reward summaries</td></tr>
         <tr><td><code>/streak</code></td><td>Your daily streak, and whether it shows on your nickname</td></tr>
         <tr><td><code>/ping</code> · <code>/about</code> · <code>/rules</code></td><td>Diagnostics, version and game rules</td></tr>
         <tr><td><code>@Xerion</code></td><td>Mention the bot (or reply to one of its AI messages) to chat — powered by Groq, never pings anyone</td></tr>
         <tr><td><code>${CONFIG.PREFIX} spawn</code></td><td>Owner-only — force a chest to appear, even with one already active (max 5, one every 30s)</td></tr>
+        <tr><td><code>/panel-owner</code></td><td>Owner-only — full control panel: force chests, force portals, activate/cancel a global event</td></tr>
       </table>
     </div>
   </section>
@@ -295,6 +297,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   await game.clearAndRegisterSlashCommands(readyClient);
   await game.restoreActiveChest(readyClient);
   await game.restorePortals(readyClient);
+  await game.restoreEvent(readyClient);
 
   // Chequeo de portales: se revisa cada pocos minutos si ya pasó 1h desde
   // el último chequeo (el reloj real vive en la base de datos, así que un

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — config.js
+ *  XERION v2.0.2 ULTRA — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '1.9.3',
+  VERSION: '2.0.2 ULTRA',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -283,16 +283,100 @@ const PORTAL_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const PORTAL_SPAWN_CHANCE = 0.5;
 const PORTAL_JOIN_WINDOW_MS = 10 * 60 * 1000; // 10 minutos para apostar y entrar
 
-/** Elige un tipo de cofre al azar según su peso, o fuerza uno si se pasa forcedKey. */
-function pickChestType(forcedKey = null) {
+// ============================================================================
+// EVENTOS GLOBALES — buffs temporales de todo el servidor que el owner activa
+// desde /panel-owner. Uno solo activo a la vez. Cada uno tiene un `weight`
+// (se elige con la misma ruleta ponderada que un rol de cofre — ver
+// pickEventType) y un `kind`+`value` que dice EXACTAMENTE qué modifica y
+// cuánto; los multiplicadores son moderados (1.5x–2x, nunca más) y con
+// tiempo límite (10–20 min) a propósito, para que la economía de roles
+// nunca se rompa — un evento es un empujón, no un atajo.
+// ============================================================================
+
+const EVENT_TYPES = {
+  DOUBLE_LUCK: {
+    key: 'DOUBLE_LUCK', name: 'Suerte Ancestral', emoji: '🍀', color: 0x22c55e, weight: 16, durationMs: 15 * 60 * 1000,
+    kind: 'luck_multiplier', value: 1.0, // mismo mecanismo que el Amuleto de Suerte (+50%), pero al doble (+100%)
+    description: 'Las probabilidades de rol de TODOS los cofres suben +100% (se resta de "Nothing").',
+  },
+  FEATHER_RAIN: {
+    key: 'FEATHER_RAIN', name: 'Lluvia de Plumas', emoji: FEATHER_EMOJI, color: 0xff9f43, weight: 14, durationMs: 15 * 60 * 1000,
+    kind: 'feather_multiplier', value: 1.6,
+    description: 'Todas las Feathers que se ganen (cofres, /daily, ingreso de rol) suben +60%.',
+  },
+  WEAK_VOID: {
+    key: 'WEAK_VOID', name: 'Vacío Debilitado', emoji: '💨', color: 0x64748b, weight: 12, durationMs: 15 * 60 * 1000,
+    kind: 'nothing_multiplier', value: 0.4, // recorta "Nothing" un 40%, repartido en el resto
+    description: 'La probabilidad de "Nothing" en los cofres baja un 40% — no la elimina del todo, para eso está el Amuleto contra el Vacío.',
+  },
+  UNSTABLE_PORTALS: {
+    key: 'UNSTABLE_PORTALS', name: 'Portales Inestables', emoji: '🌀', color: CONFIG.COLORS.PORTAL_E, weight: 9, durationMs: 20 * 60 * 1000,
+    kind: 'portal_chance_multiplier', value: 2.0,
+    description: 'Durante el evento, la probabilidad horaria de que se abra un portal se duplica.',
+  },
+  ABUNDANT_CHESTS: {
+    key: 'ABUNDANT_CHESTS', name: 'Cofres Abundantes', emoji: '🩶', color: CONFIG.COLORS.CENIZA, weight: 12, durationMs: 15 * 60 * 1000,
+    kind: 'spawn_step_multiplier', value: 0.5, // la mitad de mensajes necesarios por cada +1%
+    description: 'La probabilidad de cofre sube al doble de rápido con cada mensaje del canal.',
+  },
+  ABYSS_OMEN: {
+    key: 'ABYSS_OMEN', name: 'Presagio del Abismo', emoji: '🌑', color: CONFIG.COLORS.ABISMO, weight: 7, durationMs: 15 * 60 * 1000,
+    kind: 'chest_weight_shift', value: { BRASA: 2.5, ABISMO: 4 },
+    description: 'Los cofres de Brasa y del Abismo tienen muchas más probabilidades de aparecer que de costumbre.',
+  },
+  BLESSED_STREAK: {
+    key: 'BLESSED_STREAK', name: 'Racha Bendecida', emoji: '🔥', color: CONFIG.COLORS.FEATHERS, weight: 10, durationMs: 20 * 60 * 1000,
+    kind: 'daily_multiplier', value: 1.6,
+    description: 'La recompensa de /daily sube +60% mientras dure.',
+  },
+  ROYAL_INCOME: {
+    key: 'ROYAL_INCOME', name: 'Ingreso Real', emoji: '👑', color: CONFIG.COLORS.KING, weight: 8, durationMs: 20 * 60 * 1000,
+    kind: 'role_income_multiplier', value: 1.6,
+    description: 'El ingreso pasivo de /claim por tus roles sube +60%.',
+  },
+  MARKET_SALE: {
+    key: 'MARKET_SALE', name: 'Mercado Generoso', emoji: '🛒', color: 0x0ea5e9, weight: 8, durationMs: 15 * 60 * 1000,
+    kind: 'shop_discount', value: 0.75, // 25% de descuento
+    description: 'Todo en /shop cuesta un 25% menos.',
+  },
+  GOLDEN_PORTAL: {
+    key: 'GOLDEN_PORTAL', name: 'Portal Dorado', emoji: '🔴', color: CONFIG.COLORS.PORTAL_S, weight: 4, durationMs: 10 * 60 * 1000,
+    kind: 'force_portal_rank', value: 'RANGO_S',
+    description: 'Abre de inmediato un Portal Rango-S — el más raro y el que más reparte — si no hay uno activo ya.',
+  },
+};
+
+const EVENT_TYPE_LIST = Object.values(EVENT_TYPES);
+
+/** Elige un evento al azar según su peso (misma filosofía que pickPortalType/pickChestType), o fuerza uno si se pasa forcedKey. */
+function pickEventType(forcedKey = null) {
+  if (forcedKey && EVENT_TYPES[forcedKey]) return EVENT_TYPES[forcedKey];
+  const totalWeight = EVENT_TYPE_LIST.reduce((sum, e) => sum + e.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const type of EVENT_TYPE_LIST) {
+    roll -= type.weight;
+    if (roll <= 0) return type;
+  }
+  return EVENT_TYPE_LIST[0];
+}
+
+/**
+ * Elige un tipo de cofre al azar según su peso, o fuerza uno si se pasa
+ * forcedKey. `weightMultipliers` es opcional — ej. { BRASA: 2.5, ABISMO: 4 }
+ * durante el evento "Presagio del Abismo" — y por defecto no cambia nada
+ * (multiplicador implícito de 1), así que ningún llamador existente se ve
+ * afectado si no lo pasa.
+ */
+function pickChestType(forcedKey = null, weightMultipliers = null) {
   if (forcedKey) {
     const forced = CHEST_TYPES[forcedKey.toUpperCase()];
     if (forced) return forced;
   }
-  const totalWeight = CHEST_TYPE_LIST.reduce((sum, t) => sum + t.weight, 0);
+  const effectiveWeight = (type) => type.weight * (weightMultipliers?.[type.key] || 1);
+  const totalWeight = CHEST_TYPE_LIST.reduce((sum, t) => sum + effectiveWeight(t), 0);
   let roll = Math.random() * totalWeight;
   for (const type of CHEST_TYPE_LIST) {
-    roll -= type.weight;
+    roll -= effectiveWeight(type);
     if (roll <= 0) return type;
   }
   return CHEST_TYPE_LIST[0];
@@ -341,20 +425,30 @@ const SHOP_ITEMS = {
   },
 };
 
+// Techo explícito e intencional (no una casualidad): 5 objetos como mucho,
+// para que siempre quepan en una sola fila de botones de Discord (máximo 5
+// por fila) y la tienda no se vuelva inabarcable. Si en algún momento se
+// agrega un sexto objeto por error, esto lo avisa fuerte en el arranque en
+// vez de dejar un botón silenciosamente sin espacio.
+const SHOP_MAX_ITEMS = 5;
+if (Object.keys(SHOP_ITEMS).length > SHOP_MAX_ITEMS) {
+  throw new Error(`[Xerion] La tienda tiene ${Object.keys(SHOP_ITEMS).length} objetos — el máximo permitido es ${SHOP_MAX_ITEMS}.`);
+}
+
 // ============================================================================
 // PROBABILIDAD DINÁMICA — funciones puras, fáciles de testear.
 // ============================================================================
 
-function computeSpawnChance(messagesSinceChest) {
-  const steps = Math.floor(messagesSinceChest / CONFIG.PROBABILITY_STEP_MESSAGES);
+/** `stepMessages` es opcional (default CONFIG.PROBABILITY_STEP_MESSAGES) — el evento "Cofres Abundantes" lo pasa reducido para que suba más rápido. */
+function computeSpawnChance(messagesSinceChest, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES) {
+  const steps = Math.floor(messagesSinceChest / stepMessages);
   const chance = CONFIG.BASE_SPAWN_CHANCE + steps * CONFIG.PROBABILITY_STEP_INCREASE;
   return Math.min(chance, CONFIG.MAX_SPAWN_CHANCE);
 }
 
-function messagesUntilNextIncrease(messagesSinceChest) {
-  const step = CONFIG.PROBABILITY_STEP_MESSAGES;
-  const remainder = messagesSinceChest % step;
-  return remainder === 0 ? step : step - remainder;
+function messagesUntilNextIncrease(messagesSinceChest, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES) {
+  const remainder = messagesSinceChest % stepMessages;
+  return remainder === 0 ? stepMessages : stepMessages - remainder;
 }
 
 // ============================================================================
@@ -371,13 +465,18 @@ function rollReward(table) {
   return table[table.length - 1]; // red de seguridad ante redondeos de punto flotante
 }
 
-/** Sube un 50% las probabilidades de rol, restando esa diferencia de "Nothing" (la suma sigue siendo 100). */
-function applyLuckBoost(table) {
+/**
+ * Sube las probabilidades de rol un `factor` (0.5 = +50%, default — el
+ * Amuleto de Suerte de la tienda sigue pidiendo exactamente esto sin
+ * cambiar nada), restando esa diferencia de "Nothing" (la suma sigue siendo
+ * 100). El evento "Suerte Ancestral" llama a esto mismo con factor 1.0.
+ */
+function applyLuckBoost(table, factor = 0.5) {
   const boosted = table.map((r) => ({ ...r }));
   let delta = 0;
   for (const r of boosted) {
     if (r.kind === 'role') {
-      const increase = r.chance * 0.5;
+      const increase = r.chance * factor;
       r.chance += increase;
       delta += increase;
     }
@@ -385,6 +484,29 @@ function applyLuckBoost(table) {
   const nothing = boosted.find((r) => r.key === 'NOTHING');
   if (nothing) nothing.chance = Math.max(0, nothing.chance - delta);
   return boosted;
+}
+
+/**
+ * Versión "suave" del Amuleto contra el Vacío para el evento "Vacío
+ * Debilitado": en vez de eliminar "Nothing" por completo, la recorta un
+ * `factor` (0.4 = -40%) y reparte lo liberado proporcionalmente entre todo
+ * lo demás — misma mecánica de redistribución que applyVoidWard, pero
+ * parcial en vez de total, así que el evento sigue siendo más débil que
+ * gastar un objeto de la tienda.
+ */
+function applyPartialVoidReduction(table, factor) {
+  const reduced = table.map((r) => ({ ...r }));
+  const nothing = reduced.find((r) => r.key === 'NOTHING');
+  if (!nothing || nothing.chance <= 0 || !factor) return reduced;
+  const freedChance = nothing.chance * factor;
+  nothing.chance -= freedChance;
+  const others = reduced.filter((r) => r.key !== 'NOTHING');
+  const othersTotal = others.reduce((sum, r) => sum + r.chance, 0);
+  if (othersTotal <= 0) return reduced;
+  for (const r of others) {
+    r.chance += freedChance * (r.chance / othersTotal);
+  }
+  return reduced;
 }
 
 /** Garantiza que la tirada no caiga en "Nothing" — reparte su probabilidad proporcionalmente entre todo lo demás. */
@@ -580,6 +702,9 @@ const TIPS = [
   'No te saltes tu `/daily`: dejar pasar más de un día reinicia tu racha desde cero.',
   'Un Amuleto de Suerte sube un 50% tus probabilidades de conseguir un rol en tu próxima apertura.',
   'Entre más raro el rol que tengas, más Feathers ganas — ARISE da hasta un 25% extra en cada premio.',
+  'Con `/portals` puedes ver los 3 rangos de portal y cuánto reparte cada uno antes de apostar tus Feathers.',
+  'Usa `/event` para ver si hay un evento global activo ahora mismo — mientras dure, afecta a todo el servidor.',
+  'Mientras más Feathers apuestes en un portal, más probabilidad real tienes de ganarlo — es un sorteo ponderado, no suerte pura.',
 ];
 
 const TIP_SHOW_CHANCE = 0.2; // ~1 de cada 5 veces, para que se sienta ocasional y no repetitivo
@@ -608,11 +733,16 @@ module.exports = {
   PORTAL_CHECK_INTERVAL_MS,
   PORTAL_SPAWN_CHANCE,
   PORTAL_JOIN_WINDOW_MS,
+  EVENT_TYPES,
+  EVENT_TYPE_LIST,
+  pickEventType,
   SHOP_ITEMS,
+  SHOP_MAX_ITEMS,
   computeSpawnChance,
   messagesUntilNextIncrease,
   rollReward,
   applyLuckBoost,
+  applyPartialVoidReduction,
   applyVoidWard,
   rollFeatherAmount,
   formatFeatherRange,

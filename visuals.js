@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — visuals.js
+ *  XERION v2.0.2 ULTRA — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -15,6 +15,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ContainerBuilder,
   SectionBuilder,
   TextDisplayBuilder,
@@ -45,6 +47,8 @@ const {
   countCompletedAchievements,
   achievementBonusMultiplier,
   PORTAL_TYPE_LIST,
+  EVENT_TYPES,
+  EVENT_TYPE_LIST,
 } = require('./config.js');
 
 // ============================================================================
@@ -740,6 +744,242 @@ function portalSpinFrameAttachment(users, avatarMap, portalType, forcedWinner = 
 }
 
 // ============================================================================
+// MOTOR DE CANVAS — EVENTOS GLOBALES. A propósito una tercera identidad
+// visual totalmente distinta de las otras dos: acá es una ruleta CIRCULAR
+// de verdad (como una ruleta de casino), con los 10 eventos como gajos de
+// color alrededor de un centro con bisel, y un puntero fijo arriba. Mismo
+// espíritu defensivo que el resto: iconos como imagen (nunca texto/emoji
+// dibujado), y si el canvas falla en cualquier punto, quien lo llama
+// degrada a texto sin romper el flujo.
+// ============================================================================
+
+const WHEEL_SIZE = 480;
+const WHEEL_ICON_CODEPOINTS = {
+  DOUBLE_LUCK: '1f340',
+  FEATHER_RAIN: '1f985',
+  WEAK_VOID: '1f4a8',
+  UNSTABLE_PORTALS: '1f300',
+  ABUNDANT_CHESTS: '1f5c2',
+  ABYSS_OMEN: '1f311',
+  BLESSED_STREAK: '1f525',
+  ROYAL_INCOME: '1f451',
+  MARKET_SALE: '1f6d2',
+  GOLDEN_PORTAL: '1f534',
+};
+
+/** Precarga (y cachea) los iconos de los 10 eventos. Devuelve un Map eventKey -> Image|null. Reutiliza el mismo cache/loader que los premios. */
+async function preloadEventIcons() {
+  const entries = await Promise.all(
+    EVENT_TYPE_LIST.map(async (e) => [e.key, await loadEmojiImage(WHEEL_ICON_CODEPOINTS[e.key])]),
+  );
+  return new Map(entries);
+}
+
+function drawWheelWedge(ctx, cx, cy, radius, startAngle, endAngle, color, iconImg, dim) {
+  const { r, g, b } = hexToRgb(color);
+  const mid = (startAngle + endAngle) / 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, radius, startAngle, endAngle);
+  ctx.closePath();
+  const grad = ctx.createRadialGradient(cx, cy, radius * 0.15, cx, cy, radius);
+  if (dim) {
+    grad.addColorStop(0, `rgba(${Math.floor(r * 0.5)}, ${Math.floor(g * 0.5)}, ${Math.floor(b * 0.5)}, 0.55)`);
+    grad.addColorStop(1, `rgba(${Math.floor(r * 0.25)}, ${Math.floor(g * 0.25)}, ${Math.floor(b * 0.25)}, 0.55)`);
+  } else {
+    grad.addColorStop(0, `rgba(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)}, 1)`);
+    grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, 1)`);
+  }
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // borde divisor entre gajos — bisel fino, mismo lenguaje visual que el resto del bot.
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.stroke();
+  ctx.restore();
+
+  if (iconImg) {
+    const iconDist = radius * 0.66;
+    const iconSize = dim ? 30 : 42;
+    const ix = cx + Math.cos(mid) * iconDist;
+    const iy = cy + Math.sin(mid) * iconDist;
+    ctx.save();
+    if (dim) ctx.globalAlpha = 0.55;
+    ctx.drawImage(iconImg, ix - iconSize / 2, iy - iconSize / 2, iconSize, iconSize);
+    ctx.restore();
+  }
+}
+
+/**
+ * Dibuja la ruleta circular ya "detenida". Si se pasa forcedResultKey, ese
+ * gajo queda exactamente bajo el puntero (arriba) y resaltado; si no, se
+ * elige uno al azar para el efecto de giro (misma filosofía de "parpadeo"
+ * que ya usan las otras dos ruletas del bot, aplicada a una rotación en vez
+ * de a celdas). iconMap es opcional (preloadEventIcons) — sin él dibuja
+ * igual, solo sin los iconos.
+ */
+function generateEventWheelFrame(forcedResultKey = null, iconMap = null) {
+  const canvas = createCanvas(WHEEL_SIZE, WHEEL_SIZE);
+  const ctx = canvas.getContext('2d');
+  const cx = WHEEL_SIZE / 2;
+  const cy = WHEEL_SIZE / 2;
+  const radius = WHEEL_SIZE / 2 - 26;
+  const n = EVENT_TYPE_LIST.length;
+  const wedgeAngle = (Math.PI * 2) / n;
+
+  // fondo arcano — violeta profundo, deliberadamente distinto del dorado
+  // metálico de los cofres y del rojo cósmico de los portales.
+  const bg = ctx.createRadialGradient(cx, cy, 10, cx, cy, WHEEL_SIZE * 0.7);
+  bg.addColorStop(0, 'rgba(76, 29, 149, 0.35)');
+  bg.addColorStop(1, '#0a0612');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
+
+  const landedIndex = forcedResultKey
+    ? EVENT_TYPE_LIST.findIndex((e) => e.key === forcedResultKey)
+    : Math.floor(Math.random() * n);
+
+  // Rotamos todo el círculo para que el gajo elegido quede centrado bajo el
+  // puntero fijo de arriba (ángulo -90°/-PI/2 en coordenadas de canvas).
+  const rotation = -Math.PI / 2 - (landedIndex * wedgeAngle + wedgeAngle / 2);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  for (let i = 0; i < n; i++) {
+    const type = EVENT_TYPE_LIST[i];
+    const icon = iconMap?.get(type.key) || null;
+    const isLanded = Boolean(forcedResultKey) && i === landedIndex;
+    drawWheelWedge(ctx, 0, 0, radius, i * wedgeAngle, (i + 1) * wedgeAngle, type.color, icon, Boolean(forcedResultKey) && !isLanded);
+  }
+  ctx.restore();
+
+  // resplandor sobre el gajo ganador — solo en el frame final.
+  if (forcedResultKey) {
+    const winnerType = EVENT_TYPE_LIST[landedIndex];
+    const { r, g, b } = hexToRgb(winnerType.color);
+    ctx.save();
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.95)`;
+    ctx.shadowBlur = 38;
+    ctx.strokeStyle = `rgba(${Math.min(255, r + 80)}, ${Math.min(255, g + 80)}, ${Math.min(255, b + 80)}, 1)`;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, -Math.PI / 2 - wedgeAngle / 2, -Math.PI / 2 + wedgeAngle / 2);
+    ctx.lineTo(cx, cy);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // aro metálico exterior — mismo bisel claro/oscuro que el resto del bot.
+  ctx.save();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius + 4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius + 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // hub central con bisel.
+  const hubR = 34;
+  const hub = ctx.createRadialGradient(cx - 8, cy - 8, 2, cx, cy, hubR);
+  hub.addColorStop(0, 'rgba(230, 220, 255, 0.9)');
+  hub.addColorStop(1, 'rgba(30, 20, 45, 0.98)');
+  ctx.fillStyle = hub;
+  ctx.beginPath();
+  ctx.arc(cx, cy, hubR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.stroke();
+
+  // puntero fijo arriba — mismo triángulo con resplandor que ya usa la ruleta de jugadores.
+  ctx.save();
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = '#f5efe6';
+  ctx.beginPath();
+  ctx.moveTo(cx - 16, 6);
+  ctx.lineTo(cx + 16, 6);
+  ctx.lineTo(cx, 34);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  return canvas.toBuffer('image/png');
+}
+
+function eventWheelFrameAttachment(forcedResultKey = null, iconMap = null, name = 'event-wheel.png') {
+  const buffer = generateEventWheelFrame(forcedResultKey, iconMap);
+  return new AttachmentBuilder(buffer, { name });
+}
+
+function buildEventWheelContainer(attachmentName = 'event-wheel.png') {
+  return new ContainerBuilder()
+    .setAccentColor(0x8b5cf6)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# 🌀 Girando la Ruleta de Eventos...'))
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
+    );
+}
+
+function buildEventResultContainer(eventType, endsAt) {
+  return new ContainerBuilder()
+    .setAccentColor(eventType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `# ${eventType.emoji} Evento activado: ${eventType.name}`,
+          `-# Afecta a todo el servidor · Xerion v${CONFIG.VERSION}`,
+          '',
+          `> ${eventType.description}`,
+          '',
+          `**⏳ Termina:** <t:${Math.floor(endsAt / 1000)}:R>`,
+        ].join('\n'),
+      ),
+    );
+}
+
+function buildEventEndedContainer(eventType) {
+  return new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.NOTHING)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`## ${eventType.emoji} ${eventType.name} ha terminado\n-# Todo vuelve a la normalidad hasta el próximo evento.`),
+    );
+}
+
+/** Panel de /event — muestra el evento activo (si hay) o que no hay ninguno. */
+function buildEventStatusContainer(activeEvent) {
+  if (!activeEvent) {
+    return buildSimpleContainer('Evento Global', 'Estado actual', ['⚫ No hay ningún evento activo ahora mismo.', '', 'El owner puede activar uno aleatorio desde `/panel-owner`.'], CONFIG.COLORS.BRAND);
+  }
+  const type = EVENT_TYPES[activeEvent.key];
+  if (!type) return buildSimpleContainer('Evento Global', 'Estado actual', ['⚫ No hay ningún evento activo ahora mismo.'], CONFIG.COLORS.BRAND);
+  return buildSimpleContainer(
+    `${type.emoji} ${type.name}`,
+    'Evento activo — afecta a todo el servidor',
+    [`> ${type.description}`, '', `**⏳ Termina:** <t:${toUnixSeconds(activeEvent.endsAt)}:R>`],
+    type.color,
+  );
+}
+
+/** Línea compacta para insertar en el embed de cofre/portal cuando hay un evento activo. null si no hay ninguno. */
+function eventBannerLine(activeEvent) {
+  if (!activeEvent) return null;
+  const type = EVENT_TYPES[activeEvent.key];
+  if (!type) return null;
+  return `🎉 **Evento activo: ${type.name} ${type.emoji}** — termina <t:${toUnixSeconds(activeEvent.endsAt)}:R>`;
+}
+
+// ============================================================================
 // COMPONENTS V2 — flujo del cofre (aparición, eliminación, apertura).
 // ============================================================================
 
@@ -753,16 +993,17 @@ function buildRewardsFieldValue(table) {
     .join('\n');
 }
 
-/** Panel de aparición del cofre con estadísticas editables en tiempo real. */
-function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false, mapKey = '' }) {
+/** Panel de aparición del cofre con estadísticas editables en tiempo real. `activeEvent`/`stepMessages` son opcionales — solo importan si hay un evento global activo. */
+function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false, mapKey = '', activeEvent = null, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES }) {
   const table = chestType.rewardTable;
   const arise = table.find((r) => r.key === 'ARISE');
   const feathers = table.find((r) => r.key === 'FEATHERS');
   const nothing = table.find((r) => r.key === 'NOTHING');
-  const chance = computeSpawnChance(serverStats.messages_since_chest || 0);
-  const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest || 0);
+  const chance = computeSpawnChance(serverStats.messages_since_chest || 0, stepMessages);
+  const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest || 0, stepMessages);
+  const banner = eventBannerLine(activeEvent);
 
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(chestType.color)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
@@ -775,7 +1016,15 @@ function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, dis
           'Nadie sabe qué guarda por dentro hasta que alguien lo abre — y solo una persona tendrá esa oportunidad.',
         ].join('\n'),
       ),
-    )
+    );
+
+  if (banner) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(banner));
+  }
+
+  return container
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
@@ -832,7 +1081,7 @@ function buildOpenRow(winnerId, disabled = false, mapKey = '') {
 // cofre, ni en texto ni en estructura.
 // ============================================================================
 
-function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = false }) {
+function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = false, activeEvent = null }) {
   const lines = participants.length
     ? participants
       .slice()
@@ -841,8 +1090,9 @@ function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = fa
       .map((p) => `<@${p.userId}> — \`${formatNumber(p.stake)}\` ${FEATHER_EMOJI}`)
     : ['Nadie se animó todavía...'];
   if (participants.length > 8) lines.push(`...y ${participants.length - 8} más.`);
+  const banner = eventBannerLine(activeEvent);
 
-  return new ContainerBuilder()
+  const container = new ContainerBuilder()
     .setAccentColor(portalType.color)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
@@ -853,7 +1103,15 @@ function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = fa
           `> ${portalType.flavor}`,
         ].join('\n'),
       ),
-    )
+    );
+
+  if (banner) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(banner));
+  }
+
+  return container
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
@@ -1047,7 +1305,7 @@ function buildProfileContainer(stats, discordUser, heldRoleKeys = []) {
           `${FEATHER_EMOJI} **Feathers:** ${formatNumber(stats.feathers)}`,
           `📈 **Total Earned:** ${formatNumber(stats.total_feathers_earned)}`,
           `🛒 **Total Spent:** ${formatNumber(stats.total_feathers_spent)}`,
-          `🏅 **Server Rank:** #${stats.rank} of ${stats.totalPlayers}`,
+          `🏅 **Server Rank:** #${stats.rank} of ${stats.totalPlayers}${stats.nextRankFeathers > 0 ? ` · te faltan ${formatNumber(stats.nextRankFeathers)} para subir un puesto` : ''}`,
         ].join('\n'),
       ),
     )
@@ -1168,15 +1426,33 @@ function buildRatesContainer() {
   return container;
 }
 
-function buildShopContainer(shopCounts, ownerId = '') {
-  return new ContainerBuilder()
-    .setAccentColor(CONFIG.COLORS.KING)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Tienda de Xerion\n-# Tu saldo: ${FEATHER_EMOJI} **${formatNumber(shopCounts.feathers)}** Feathers`))
+/** `activeEvent` es opcional — solo cambia algo si es MARKET_SALE (20% o el % que tenga configurado). */
+function buildShopContainer(shopCounts, ownerId = '', activeEvent = null) {
+  const eventType = activeEvent ? EVENT_TYPES[activeEvent.key] : null;
+  const onSale = eventType?.kind === 'shop_discount';
+  const priceTag = (baseCost) => {
+    if (!onSale) return `\`${baseCost}\` ${FEATHER_EMOJI}`;
+    const discounted = Math.max(1, Math.round(baseCost * eventType.value));
+    return `~~\`${baseCost}\`~~ \`${discounted}\` ${FEATHER_EMOJI} 🛒`;
+  };
+  const effectiveCost = (baseCost) => (onSale ? Math.max(1, Math.round(baseCost * eventType.value)) : baseCost);
+
+  const container = new ContainerBuilder()
+    .setAccentColor(onSale ? eventType.color : CONFIG.COLORS.KING)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Tienda de Xerion\n-# Tu saldo: ${FEATHER_EMOJI} **${formatNumber(shopCounts.feathers)}** Feathers`));
+
+  if (onSale) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🛒 **¡${eventType.name} activo!** Todo tiene descuento — termina <t:${toUnixSeconds(activeEvent.endsAt)}:R>`));
+  }
+
+  container
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `### ${SHOP_ITEMS.SHIELD.emoji} ${SHOP_ITEMS.SHIELD.name} — \`${SHOP_ITEMS.SHIELD.cost}\` ${FEATHER_EMOJI}`,
+          `### ${SHOP_ITEMS.SHIELD.emoji} ${SHOP_ITEMS.SHIELD.name} — ${priceTag(SHOP_ITEMS.SHIELD.cost)}`,
           `> ${SHOP_ITEMS.SHIELD.description}`,
           `-# Tienes: **${shopCounts.shields}**`,
         ].join('\n'),
@@ -1186,7 +1462,7 @@ function buildShopContainer(shopCounts, ownerId = '') {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `### ${SHOP_ITEMS.CHARM.emoji} ${SHOP_ITEMS.CHARM.name} — \`${SHOP_ITEMS.CHARM.cost}\` ${FEATHER_EMOJI}`,
+          `### ${SHOP_ITEMS.CHARM.emoji} ${SHOP_ITEMS.CHARM.name} — ${priceTag(SHOP_ITEMS.CHARM.cost)}`,
           `> ${SHOP_ITEMS.CHARM.description}`,
           `-# Tienes: **${shopCounts.luck_charms}**`,
         ].join('\n'),
@@ -1196,7 +1472,7 @@ function buildShopContainer(shopCounts, ownerId = '') {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `### ${SHOP_ITEMS.REVIVE.emoji} ${SHOP_ITEMS.REVIVE.name} — \`${SHOP_ITEMS.REVIVE.cost}\` ${FEATHER_EMOJI}`,
+          `### ${SHOP_ITEMS.REVIVE.emoji} ${SHOP_ITEMS.REVIVE.name} — ${priceTag(SHOP_ITEMS.REVIVE.cost)}`,
           `> ${SHOP_ITEMS.REVIVE.description}`,
           `-# Tienes: **${shopCounts.revives}**`,
         ].join('\n'),
@@ -1206,7 +1482,7 @@ function buildShopContainer(shopCounts, ownerId = '') {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `### ${SHOP_ITEMS.WARD.emoji} ${SHOP_ITEMS.WARD.name} — \`${SHOP_ITEMS.WARD.cost}\` ${FEATHER_EMOJI}`,
+          `### ${SHOP_ITEMS.WARD.emoji} ${SHOP_ITEMS.WARD.name} — ${priceTag(SHOP_ITEMS.WARD.cost)}`,
           `> ${SHOP_ITEMS.WARD.description}`,
           `-# Tienes: **${shopCounts.void_wards}**`,
         ].join('\n'),
@@ -1216,7 +1492,7 @@ function buildShopContainer(shopCounts, ownerId = '') {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          `### ${SHOP_ITEMS.TIME_SKIP.emoji} ${SHOP_ITEMS.TIME_SKIP.name} — \`${SHOP_ITEMS.TIME_SKIP.cost}\` ${FEATHER_EMOJI}`,
+          `### ${SHOP_ITEMS.TIME_SKIP.emoji} ${SHOP_ITEMS.TIME_SKIP.name} — ${priceTag(SHOP_ITEMS.TIME_SKIP.cost)}`,
           `> ${SHOP_ITEMS.TIME_SKIP.description}`,
           `-# Tienes: **${shopCounts.time_skips}**`,
         ].join('\n'),
@@ -1227,31 +1503,33 @@ function buildShopContainer(shopCounts, ownerId = '') {
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`xerion_buy_shield::${ownerId}`)
-          .setLabel(`Escudo (${SHOP_ITEMS.SHIELD.cost})`)
+          .setLabel(`Escudo (${effectiveCost(SHOP_ITEMS.SHIELD.cost)})`)
           .setEmoji(SHOP_ITEMS.SHIELD.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`xerion_buy_charm::${ownerId}`)
-          .setLabel(`Amuleto (${SHOP_ITEMS.CHARM.cost})`)
+          .setLabel(`Amuleto (${effectiveCost(SHOP_ITEMS.CHARM.cost)})`)
           .setEmoji(SHOP_ITEMS.CHARM.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`xerion_buy_revive::${ownerId}`)
-          .setLabel(`Pluma Fénix (${SHOP_ITEMS.REVIVE.cost})`)
+          .setLabel(`Pluma Fénix (${effectiveCost(SHOP_ITEMS.REVIVE.cost)})`)
           .setEmoji(SHOP_ITEMS.REVIVE.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`xerion_buy_ward::${ownerId}`)
-          .setLabel(`Vacío (${SHOP_ITEMS.WARD.cost})`)
+          .setLabel(`Vacío (${effectiveCost(SHOP_ITEMS.WARD.cost)})`)
           .setEmoji(SHOP_ITEMS.WARD.emoji)
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`xerion_buy_timeskip::${ownerId}`)
-          .setLabel(`Acelerador (${SHOP_ITEMS.TIME_SKIP.cost})`)
+          .setLabel(`Acelerador (${effectiveCost(SHOP_ITEMS.TIME_SKIP.cost)})`)
           .setEmoji(SHOP_ITEMS.TIME_SKIP.emoji)
           .setStyle(ButtonStyle.Secondary),
       ),
     );
+
+  return container;
 }
 
 function buildNotificationContainer(enabled, ownerId = '') {
@@ -1279,9 +1557,9 @@ function buildNotificationContainer(enabled, ownerId = '') {
     );
 }
 
-function buildStatsContainer(serverStats) {
-  const chance = computeSpawnChance(serverStats.messages_since_chest);
-  const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest);
+function buildStatsContainer(serverStats, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES) {
+  const chance = computeSpawnChance(serverStats.messages_since_chest, stepMessages);
+  const untilNext = messagesUntilNextIncrease(serverStats.messages_since_chest, stepMessages);
 
   const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.BRAND)
@@ -1342,11 +1620,13 @@ function buildHelpContainer() {
       new TextDisplayBuilder().setContent(
         [
            '**Comandos de Jugador**',
-          '`/profile` [`xn profile`] — tus estadísticas completas',
+          '`/profile` [`xn profile`] — tus estadísticas completas, incluye tu posición',
           '`/inventory` [`xn inv`] — balance rápido',
           '`/leaderboard` [`xn top`] — top Feather holders',
           '`/rates` [`xn rates`] — probabilidades de los 3 tipos de cofre',
-          '`/shop` [`xn shop`] — gasta tus Feathers en Escudos, Amuletos y Plumas Fénix',
+          '`/portals` [`xn portals`] — los 3 rangos de portal y cuánto reparte cada uno',
+          '`/event` [`xn event`] — si hay un evento global activo ahora mismo',
+          '`/shop` [`xn shop`] — gasta tus Feathers en objetos (máximo 5, siempre)',
           '`/notification` [`xn notif`] — activa o desactiva los DM de cofre',
           '`/stats` [`xn stats`] — estadísticas del servidor',
            '`/help` [`xn help`] — este menú',
@@ -1355,8 +1635,6 @@ function buildHelpContainer() {
            '`/claim` [`xn claim`] — recolecta las Feathers pasivas que dan tus roles',
            '`/history` [`xn history`] — últimas recompensas obtenidas',
            '`/achievements` [`xn achievements`] — logros desbloqueados',
-           '`/rank` [`xn rank`] — tu posición y progreso',
-           '`/rewards` [`xn rewards`] — resumen de recompensas',
            '`/streak` [`xn streak`] — tu racha de dailies, y si se muestra en tu apodo',
            '`/ping` [`xn ping`] — latencia actual del bot',
            '`/about` [`xn about`] — versión y estado de Xerion',
@@ -1366,7 +1644,13 @@ function buildHelpContainer() {
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(['**Comando de Administrador**', '`/spawn` [`xn spawn`] — fuerza la aparición de un cofre (opcionalmente elige el tipo), sin importar si ya hay uno activo — máximo 5 a la vez, uno cada 30s'].join('\n')),
+      new TextDisplayBuilder().setContent(
+        [
+          '**Comandos de Administrador**',
+          '`/spawn` [`xn spawn`] — fuerza un cofre rápido (opcionalmente elige el tipo) — máximo 5 a la vez, uno cada 30s',
+          '`/panel-owner` — panel de control completo: forzar cofres, forzar portales, y activar o cancelar un evento global',
+        ].join('\n'),
+      ),
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
@@ -1429,31 +1713,123 @@ function buildAchievementsContainer(stats, heldRoleKeys = []) {
   return buildSimpleContainer('Achievements', 'Logros permanentes', lines, CONFIG.COLORS.AURA_INFINITE);
 }
 
-function buildRankContainer(stats) {
-  return buildSimpleContainer(
-    'Tu rango',
-    'Progreso en el servidor',
-    [
-      `🏅 **Posición:** #${stats.rank} de ${stats.totalPlayers}`,
-      `${FEATHER_EMOJI} **Feathers:** ${formatNumber(stats.feathers)}`,
-      `📈 **Te faltan:** ${formatNumber(Math.max(0, stats.nextRankFeathers || 0))} para subir un puesto`,
-      `🏆 **Victorias:** ${formatNumber(stats.chests_won)}`,
-    ],
-    CONFIG.COLORS.KING,
-  );
+/** Info de /portals — mismo espíritu que /rates pero para los 3 rangos de portal. */
+function buildPortalRatesContainer() {
+  const container = new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.PORTAL_S)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# Portal Odds\n-# Los 3 rangos de portal — cuanto más apuestas, más probabilidad real tenés de ganar'));
+
+  for (const type of PORTAL_TYPE_LIST) {
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          [
+            `### ${type.emoji} ${type.name} — \`${type.rankLabel}\``,
+            `> ${type.flavor}`,
+            `**${FEATHER_EMOJI} Apuesta mínima:** \`${formatNumber(type.minStake)}\``,
+            `**🏆 El ganador se lleva:** \`${Math.round(type.payout.winnerPct * 100)}%\` del pozo`,
+            `**🤝 El resto se reparte:** \`${Math.round(type.payout.othersPct * 100)}%\` (proporcional a lo apostado)`,
+          ].join('\n'),
+        ),
+      );
+  }
+
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# Cada hora hay ${(CONFIG.PORTAL_SPAWN_CHANCE * 100).toFixed(0)}% de probabilidad de que se abra uno. Ventana de 10 minutos para apostar y entrar.`,
+      ),
+    );
+
+  return container;
 }
 
-function buildRewardsContainer() {
-  const lines = CHEST_TYPE_LIST.map((type) => {
-    const best = type.rewardTable.find((reward) => reward.key === 'ARISE');
-    const nothing = type.rewardTable.find((reward) => reward.key === 'NOTHING');
-    return `${type.emoji} **${type.name}** · ${type.tierLabel}\n> Mejor: ${best.chance}% · Nada: ${nothing.chance}%`;
-  });
-  return buildSimpleContainer('Rewards', 'Resumen de recompensas', lines, CONFIG.COLORS.ARISE);
+/**
+ * /panel-owner — panel Ephemeral Components V2 con todo el control manual:
+ * forzar cofres, forzar portales, y activar/cancelar el evento global.
+ * `status` trae el estado en vivo para que el panel se pueda re-renderizar
+ * (interaction.update) después de cada acción sin perder contexto.
+ */
+function buildOwnerPanelContainer(status) {
+  const { chestCooldownActive, activeChestCount, portalActive, portalTypeLabel, activeEvent } = status;
+
+  const container = new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.BRAND)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`# 🛠️ Panel del Owner\n-# Control manual de Xerion v${CONFIG.VERSION} — solo vos podés ver esto`),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          '### 🗃️ Forzar un cofre',
+          chestCooldownActive
+            ? '-# ⏳ Cooldown activo — espera un poco antes de forzar otro.'
+            : `-# ${activeChestCount} cofre(s) forzado(s) activos ahora mismo.`,
+        ].join('\n'),
+      ),
+    )
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        ...CHEST_TYPE_LIST.map((type) =>
+          new ButtonBuilder().setCustomId(`xerion_admin_chest::${type.key}`).setLabel(type.name).setEmoji(type.emoji).setStyle(ButtonStyle.Secondary).setDisabled(chestCooldownActive),
+        ),
+        new ButtonBuilder().setCustomId('xerion_admin_chest::RANDOM').setLabel('Aleatorio').setEmoji('🎲').setStyle(ButtonStyle.Primary).setDisabled(chestCooldownActive),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        ['### 🌀 Forzar un portal', portalActive ? `-# Ya hay uno activo (${portalTypeLabel}) — se cerrará solo.` : '-# No hay ninguno activo ahora mismo.'].join('\n'),
+      ),
+    )
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        ...PORTAL_TYPE_LIST.map((type) =>
+          new ButtonBuilder().setCustomId(`xerion_admin_portal::${type.key}`).setLabel(type.key.replace('RANGO_', 'Rango-')).setEmoji(type.emoji).setStyle(ButtonStyle.Secondary).setDisabled(portalActive),
+        ),
+        new ButtonBuilder().setCustomId('xerion_admin_portal::RANDOM').setLabel('Aleatorio').setEmoji('🎲').setStyle(ButtonStyle.Primary).setDisabled(portalActive),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          '### 🎉 Evento global',
+          activeEvent
+            ? `-# Activo ahora: **${EVENT_TYPES[activeEvent.key]?.name}** ${EVENT_TYPES[activeEvent.key]?.emoji} — termina <t:${toUnixSeconds(activeEvent.endsAt)}:R>`
+            : '-# No hay ninguno activo. Elegí uno de la lista o dejá que la ruleta decida.',
+        ].join('\n'),
+      ),
+    )
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('xerion_admin_event_select')
+          .setPlaceholder(activeEvent ? 'Ya hay un evento activo...' : 'Elegí un evento o dejalo al azar')
+          .setDisabled(Boolean(activeEvent))
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setLabel('🎲 Aleatorio (ponderado, como los roles)').setValue('RANDOM'),
+            ...EVENT_TYPE_LIST.map((type) =>
+              new StringSelectMenuOptionBuilder().setLabel(`${type.name}`).setEmoji(type.emoji).setDescription(type.description.slice(0, 100)).setValue(type.key),
+            ),
+          ),
+      ),
+    )
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('xerion_admin_event_cancel').setLabel('Cancelar evento activo').setEmoji('⛔').setStyle(ButtonStyle.Danger).setDisabled(!activeEvent),
+        new ButtonBuilder().setCustomId('xerion_admin_refresh').setLabel('Actualizar panel').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
+      ),
+    );
+
+  return container;
 }
 
-function buildChestStatusContainer(channelId, state, active) {
-  const chance = computeSpawnChance(state.messages_since_chest || 0);
+function buildChestStatusContainer(channelId, state, active, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES) {
+  const chance = computeSpawnChance(state.messages_since_chest || 0, stepMessages);
   return buildSimpleContainer(
     'Chest Status',
     `<#${channelId}> · estado en tiempo real`,
@@ -1607,8 +1983,14 @@ module.exports = {
   buildRoleIncomeContainer,
   buildHistoryContainer,
   buildAchievementsContainer,
-  buildRankContainer,
-  buildRewardsContainer,
+  buildPortalRatesContainer,
+  buildOwnerPanelContainer,
+  buildEventWheelContainer,
+  buildEventResultContainer,
+  buildEventEndedContainer,
+  buildEventStatusContainer,
+  eventWheelFrameAttachment,
+  preloadEventIcons,
   buildChestStatusContainer,
   buildStreakContainer,
   buildPingContainer,

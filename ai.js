@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v1.9.3 — ai.js
+ *  XERION v2.0.2 ULTRA — ai.js
  *  Integración con Groq (API compatible con OpenAI) para el chat: la gente
  *  puede hablar con el bot mencionándolo (@Xerion) o respondiendo a un
  *  mensaje que la IA generó antes. Nada más activa la IA — nunca se mete
@@ -24,19 +24,30 @@
  */
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b'; // rápido y barato — reemplazo oficial de Groq para el modelo descontinuado
+
+// Groq retiró `llama-3.1-8b-instant` y `llama-3.3-70b-versatile` el 16 de
+// agosto de 2026 (por eso el reporte de "varios modelos no funcionan desde
+// el 16" — confirmado contra console.groq.com/docs/deprecations). El
+// reemplazo oficial y actual es `openai/gpt-oss-20b`, y NO está deprecado —
+// así que es el default seguro. Si en el futuro Groq vuelve a retirar algo,
+// FALLBACK_MODEL es la red de seguridad de abajo, no hace falta tocar nada
+// más: cualquier modelo puesto en GROQ_MODEL que falle por estar
+// descontinuado cae automáticamente acá en el mismo intento.
+const PRIMARY_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+const FALLBACK_MODEL = 'openai/gpt-oss-20b';
 
 function isAiAvailable() {
   return Boolean(process.env.GROQ_API_KEY);
 }
 
-/**
- * Llamado crudo a Groq. Nunca lanza — cualquier problema (sin API key, error
- * HTTP, timeout, respuesta rara) devuelve null y lo deja logueado.
- */
-async function callGroq(messages, { maxTokens = 200, temperature = 0.9, timeoutMs = 6000 } = {}) {
-  if (!isAiAvailable()) return null;
+/** true si el cuerpo de error de Groq indica un modelo inválido/descontinuado (no un problema de red, cuota, etc). */
+function looksLikeModelError(status, bodyText) {
+  if (status !== 400 && status !== 404) return false;
+  const t = (bodyText || '').toLowerCase();
+  return t.includes('model') && (t.includes('decommission') || t.includes('does not exist') || t.includes('not found') || t.includes('deprecat'));
+}
 
+async function requestGroq(model, messages, { maxTokens, temperature, timeoutMs }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -46,28 +57,50 @@ async function callGroq(messages, { maxTokens = 200, temperature = 0.9, timeoutM
         'Content-Type': 'application/json',
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-      }),
+      body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature }),
       signal: controller.signal,
     });
 
     if (!res.ok) {
-      console.error(`[Xerion IA] Groq respondió HTTP ${res.status}`);
-      return null;
+      const bodyText = await res.text().catch(() => '');
+      return { ok: false, status: res.status, bodyText };
     }
-
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim();
-    return text || null;
+    return { ok: true, text: text || null };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Llamado a Groq con reintento automático de modelo. Nunca lanza — cualquier
+ * problema (sin API key, error HTTP, timeout, respuesta rara) devuelve null
+ * y lo deja logueado con el cuerpo real del error (no solo el status), para
+ * que un problema de modelo/cuota/etc. se pueda diagnosticar desde los logs
+ * sin adivinar. Si el modelo configurado (PRIMARY_MODEL) fallara por estar
+ * descontinuado, reintenta UNA vez con FALLBACK_MODEL antes de rendirse —
+ * así un GROQ_MODEL viejo en las variables de entorno nunca deja la IA muda.
+ */
+async function callGroq(messages, { maxTokens = 200, temperature = 0.9, timeoutMs = 6000 } = {}) {
+  if (!isAiAvailable()) return null;
+
+  try {
+    const first = await requestGroq(PRIMARY_MODEL, messages, { maxTokens, temperature, timeoutMs });
+    if (first.ok) return first.text;
+
+    console.error(`[Xerion IA] Groq respondió HTTP ${first.status} con el modelo "${PRIMARY_MODEL}": ${first.bodyText.slice(0, 300)}`);
+
+    if (PRIMARY_MODEL !== FALLBACK_MODEL && looksLikeModelError(first.status, first.bodyText)) {
+      console.error(`[Xerion IA] "${PRIMARY_MODEL}" parece descontinuado — reintentando una vez con "${FALLBACK_MODEL}".`);
+      const retry = await requestGroq(FALLBACK_MODEL, messages, { maxTokens, temperature, timeoutMs });
+      if (retry.ok) return retry.text;
+      console.error(`[Xerion IA] El reintento con "${FALLBACK_MODEL}" también falló (HTTP ${retry.status}): ${retry.bodyText.slice(0, 300)}`);
+    }
+    return null;
   } catch (err) {
     console.error('[Xerion IA] Error llamando a Groq:', err.message);
     return null;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
