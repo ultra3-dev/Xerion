@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.4 ULTRA — admin-panel.js
+ *  XERION v2.0.5 ULTRA — admin-panel.js
  * ----------------------------------------------------------------------------
  *  El nuevo `/panel-owner`: un panel Ephemeral Components V2 único, solo
  *  para el owner, que reemplaza el flujo manual de `/spawn` con un centro de

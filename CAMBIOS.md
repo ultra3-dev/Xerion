@@ -1,4 +1,44 @@
-# Xerion v2.0.4 ULTRA — Qué cambió (arreglos reales de la v2.0.2)
+# Xerion v2.0.5 ULTRA — Qué cambió
+
+## ⚔️ Portales: eliminación por rondas de verdad, no un flash de 1.8s
+
+Tenías razón en que se veían aburridos. El resultado (ganador y reparto) sigue saliendo SIEMPRE de `computePortalPayouts` antes de animar nada — eso no cambió, sigue siendo matemáticamente limpio — pero ahora cómo se cuenta esa historia es completamente distinto:
+
+- El Boss ahora elimina en **rondas reales** (hasta 4), cada una con su propio mensaje tipo "El Boss ataca a **@fulano** — ¡eliminado!", con pausa entre ronda y ronda — mismo ritmo dramático que ya tenía la eliminación de los cofres, pero con canvas en vez de solo texto.
+- El canvas del portal ahora tiene **iconos de verdad**: una cara de Boss sobre la silueta central, un ícono de KO sobre cada participante eliminado, y una corona sobre el ganador en el frame final — nada de esto estaba antes, era solo círculos y colores.
+- El frame de apertura muestra a todos de pie antes de que empiece la pelea, para que se sienta como el inicio de algo, no un resultado instantáneo.
+
+## 🕶️ Cofre OG — nuevo, mucho más raro que el Abismo
+
+- 4to tipo de cofre. Su probabilidad de aparecer es ~16 veces menor que la del Abismo, y tiene su color propio, totalmente distinto de los otros 3.
+- 3 roles exclusivos y propios — **9K**, **3K** y **OG** — que no comparten nada con ARISE/KING/GOAT/AURA INFINITE/STAR X. Menos probabilidad de rol que el Abismo, más probabilidad de Feathers (y en mayor cantidad), tal cual pediste.
+- Los 3 tienen beneficios reales integrados en todo el bot — ingreso pasivo por `/claim`, bonus de Feathers, se muestran en `/profile` y `/cooldowns` — exactamente igual que los otros 5, no un sistema aparte.
+- 4 logros nuevos: uno por cada rol del OG, y uno extra ("La Triple Corona") por tener los 3 a la vez. El logro "Coleccionista" viejo se dejó tal cual estaba (los 5 roles originales) — de otra forma, con 8 roles en vez de 5, se hubiera vuelto casi imposible de conseguir.
+- 🐛 **Bug real que encontré y arreglé antes de que llegara a tus manos:** el mensaje de resultado del cofre tenía un mapa de "frase de sabor" por rol que no incluía a los 3 nuevos — abrir el Cofre OG y ganar un rol iba a mostrar literalmente `*undefined*` en el mensaje. Lo detecté con una prueba que arma cada combinación posible de cofre+recompensa y revisa el texto real, no solo si tira error. Encontré y arreglé 3 mapas de roles más con el mismo problema (etiquetas de perfil, iconos de la ruleta) antes de que ninguno llegara a mostrarse roto.
+
+## 🎰 Minijuego de RNG — `/roll`, `/sell`, `/redeem`
+
+- `/roll` (15 Feathers): 7 niveles de rareza, desde Común hasta **Secreto** — 1 entre 10.000 tiradas, extremadamente difícil a propósito. Animación de carta tipo gacha, cuarta identidad visual de canvas del bot (vertical, con orbe y destellos — nada que ver con la tira de cofres, el ring de portales o la ruleta de eventos).
+- `/sell`: vende todo tu inventario de RNG de una sola vez por Fragmentos.
+- `/redeem`: canjea todos tus Fragmentos por Feathers.
+- Balance probado con 500.000 tiradas simuladas: el valor esperado de una tirada (en Feathers, vendiendo y canjeando todo) es menor al costo de tirar — es un sumidero de Feathers, no una forma de generarlas gratis.
+
+## Limpieza de comandos
+
+- Afuera: `/ping` (se fusionó dentro de `/about`, que ahora también muestra la latencia) y `/rules` (ya lo dijiste — comando de relleno).
+- Adentro: `/roll`, `/sell`, `/redeem`.
+
+## Tienda
+
+- Precios subidos: Escudo 220, Amuleto de Suerte 350, Pluma Fénix 650, Amuleto contra el Vacío 750, Acelerador Temporal 500.
+
+## Cómo se probó esta vez
+
+Además de lo de siempre (sintaxis, requires), esta vez la prueba incluyó: 200.000 tiradas simuladas de probabilidad de cofres/RNG comparando el resultado real contra el esperado, cada combinación de cofre × recompensa posible (incluido el Cofre OG) revisando el texto real en busca de "undefined"/"NaN", una pelea de portal completa con 5 participantes verificando que el pozo se reparte exacto, y los 3 comandos de RNG de punta a punta.
+
+---
+
+
 
 La v2.0.2 se probó leyendo el código y con requires/sintaxis, pero no ejecutando cada flujo con datos reales — por eso se colaron estos bugs. Para esta versión, cada arreglo de abajo se confirmó corriendo el código de verdad (no solo revisándolo), incluyendo un barrido que construye los ~30 paneles del bot con datos de prueba y busca literalmente "NaN"/"undefined" en el texto que arman.
 

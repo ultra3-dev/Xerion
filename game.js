@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.4 ULTRA — game.js
+ *  XERION v2.0.5 ULTRA — game.js
  * ----------------------------------------------------------------------------
  *  El motor del juego: aparición de cofres (con probabilidad dinámica y 3
  *  tipos), la batalla de eliminación (con el Escudo de la tienda), la
@@ -59,6 +59,9 @@ const {
   EVENT_TYPE_LIST,
   pickEventType,
   applyPartialVoidReduction,
+  pickRngItem,
+  RNG_ITEM_LIST,
+  RNG_ROLL_COST,
 } = require('./config.js');
 
 const db = require('./database.js');
@@ -167,6 +170,30 @@ const ELIMINATION_PHRASES_BATCH = [
   'Silencio para {name}.',
   'Sin piedad — {name} quedan fuera.',
 ];
+
+const PORTAL_BOSS_PHRASES_SINGLE = [
+  'El Boss ataca sin piedad — {name} queda fuera.',
+  '{name} no resistió el golpe del Boss.',
+  'Un zarpazo del Boss elimina a {name}.',
+  'El Boss se traga entero a {name}.',
+  '{name} cae ante el Boss del portal.',
+  'Ni rastro de {name} — el Boss no dejó nada.',
+];
+
+const PORTAL_BOSS_PHRASES_BATCH = [
+  'El Boss ataca en área — {name} quedan fuera.',
+  '{name} no resistieron el golpe del Boss.',
+  'De un solo zarpazo, el Boss elimina a {name}.',
+  'El Boss arrasa con {name}.',
+  'Ni rastro de {name} — el Boss no dejó nada.',
+];
+
+function formatPortalEliminationLine(eliminatedIds) {
+  const pool = eliminatedIds.length === 1 ? PORTAL_BOSS_PHRASES_SINGLE : PORTAL_BOSS_PHRASES_BATCH;
+  const phrase = pickPhrase(pool);
+  const mentionsText = eliminatedIds.map((id) => `<@${id}>`).join(', ');
+  return phrase.replace('{name}', `**${mentionsText}**`);
+}
 
 let lastPhraseIndex = -1;
 function pickPhrase(pool) {
@@ -1134,6 +1161,14 @@ async function resolvePortalPhase(channel, state) {
  * matemáticamente por computePortalPayouts — la animación es narrativa, el
  * resultado siempre sale de esa función, nunca al revés.
  */
+/**
+ * Pelea del Boss del portal, en rondas reales — no un solo flash. El
+ * resultado (ganador + reparto) sale SIEMPRE de computePortalPayouts,
+ * calculado antes de animar nada: la secuencia de abajo es 100% narrativa,
+ * nunca decide el resultado, solo lo dramatiza en varias rondas (mismo
+ * principio que ya usa el cofre con formatEliminationLine, aplicado acá
+ * con canvas + iconos en vez de solo texto).
+ */
 async function runPortalBattleAnimation(channel, state, participants) {
   const payout = computePortalPayouts(state.portalType, participants);
 
@@ -1146,28 +1181,53 @@ async function runPortalBattleAnimation(channel, state, participants) {
     const winnerUser = users.find((u) => u.id === payout.winnerId) || null;
 
     if (users.length > 0) {
+      const icons = await visuals.preloadPortalIcons().catch(() => ({}));
+      const avatarMap = await visuals.preloadPlayerAvatars(users);
+
+      const nonWinnerUsers = winnerUser ? users.filter((u) => u.id !== winnerUser.id) : [...users];
+      const shuffledOrder = shuffle([...nonWinnerUsers]);
+      const totalRounds = Math.min(4, Math.max(1, Math.ceil(shuffledOrder.length / 2)));
+      const perRound = shuffledOrder.length > 0 ? Math.max(1, Math.ceil(shuffledOrder.length / totalRounds)) : 0;
+      const rounds = [];
+      for (let i = 0; i < shuffledOrder.length; i += perRound) rounds.push(shuffledOrder.slice(i, i + perRound));
+
       seqMessage = await channel
         .send({
-          components: [visuals.buildPortalBattleContainer(state.portalType)],
+          components: [visuals.buildPortalBattleContainer(state.portalType, '⚔️ El Boss del portal despertó — que empiece la pelea.')],
           flags: MessageFlags.IsComponentsV2,
+          files: [visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType, { icons })],
           allowedMentions: SAFE_MENTIONS,
         })
         .catch(() => null);
 
       if (seqMessage) {
-        const avatarMap = await visuals.preloadPlayerAvatars(users);
-        const spinDelays = [90, 100, 115, 130, 150, 175, 205, 240, 280, 330];
-        for (let i = 0; i < spinDelays.length; i++) {
-          const isLast = i === spinDelays.length - 1;
-          const attachment = visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType, isLast ? winnerUser : null);
-          await seqMessage.edit({
-            components: [visuals.buildPortalBattleContainer(state.portalType)],
-            flags: MessageFlags.IsComponentsV2,
-            files: [attachment],
-            attachments: [],
-          });
-          await sleep(spinDelays[i]);
+        await sleep(CONFIG.INTRO_DELAY_MS);
+        const defeated = new Set();
+
+        for (const round of rounds) {
+          for (const u of round) defeated.add(u.id);
+          const caption = formatPortalEliminationLine(round.map((u) => u.id));
+          await seqMessage
+            .edit({
+              components: [visuals.buildPortalBattleContainer(state.portalType, caption)],
+              flags: MessageFlags.IsComponentsV2,
+              files: [visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType, { defeatedIds: defeated, icons })],
+              attachments: [],
+            })
+            .catch(() => {});
+          await sleep(randomBetween(CONFIG.ELIMINATION_DELAY_MIN_MS, CONFIG.ELIMINATION_DELAY_MAX_MS));
         }
+
+        const finalCaption = winnerUser ? `👑 <@${winnerUser.id}> es el último de pie.` : null;
+        await seqMessage
+          .edit({
+            components: [visuals.buildPortalBattleContainer(state.portalType, finalCaption)],
+            flags: MessageFlags.IsComponentsV2,
+            files: [visuals.portalSpinFrameAttachment(users, avatarMap, state.portalType, { defeatedIds: defeated, winnerUser, icons })],
+            attachments: [],
+          })
+          .catch(() => {});
+        await sleep(1200);
         spinSucceeded = true;
       }
     }
@@ -1389,9 +1449,10 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('history').setDescription('View your latest chest rewards.'),
   new SlashCommandBuilder().setName('achievements').setDescription('View your Xerion achievements.'),
   new SlashCommandBuilder().setName('streak').setDescription('View your Xerion activity.'),
-  new SlashCommandBuilder().setName('ping').setDescription('Check Xerion latency.'),
-  new SlashCommandBuilder().setName('about').setDescription('About Xerion and its current version.'),
-  new SlashCommandBuilder().setName('rules').setDescription('Read the quick game rules.'),
+  new SlashCommandBuilder().setName('about').setDescription('About Xerion, its current version, and latency.'),
+  new SlashCommandBuilder().setName('roll').setDescription(`Roll for a random item (${RNG_ROLL_COST} Feathers).`),
+  new SlashCommandBuilder().setName('sell').setDescription('Sell your entire RNG inventory for Fragments.'),
+  new SlashCommandBuilder().setName('redeem').setDescription('Redeem all your Fragments for Feathers.'),
   adminPanel.commandDefinition,
 ].map((cmd) => cmd.toJSON());
 
@@ -1563,6 +1624,76 @@ async function cmdShop(interaction) {
   }
 }
 
+const RNG_SPIN_DELAYS_MS = [90, 100, 120, 150, 190, 240, 300];
+
+async function cmdRoll(interaction) {
+  await interaction.deferReply();
+  try {
+    // El objeto se decide ANTES de animar nada — la animación de abajo es
+    // 100% narrativa, mismo principio que cofres/portales/eventos.
+    const item = pickRngItem();
+    const column = db.RNG_ITEM_COLUMNS[item.key];
+    const result = await db.rollRng(interaction.user.id, column, RNG_ROLL_COST);
+
+    if (!result) {
+      const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
+      return interaction.editReply({ components: [visuals.buildRollNotEnoughContainer(stats.feathers || 0)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    }
+
+    try {
+      const iconMap = await visuals.preloadRngIcons().catch(() => null);
+      const flickerKeys = RNG_ITEM_LIST.map((i) => i.key);
+      for (const delay of RNG_SPIN_DELAYS_MS) {
+        const flickerKey = flickerKeys[randomInt(flickerKeys.length)];
+        await interaction
+          .editReply({
+            components: [visuals.buildRollSpinContainer()],
+            flags: MessageFlags.IsComponentsV2,
+            files: [visuals.rngCardFrameAttachment(flickerKey, iconMap)],
+            attachments: [],
+          })
+          .catch(() => {});
+        await sleep(delay);
+      }
+      await interaction.editReply({
+        components: [visuals.buildRollResultContainer(item, result.feathers)],
+        flags: MessageFlags.IsComponentsV2,
+        files: [visuals.rngCardFrameAttachment(item.key, iconMap)],
+        attachments: [],
+        allowedMentions: SAFE_MENTIONS,
+      });
+    } catch (err) {
+      console.error('[Xerion] El canvas de /roll falló, se degrada a solo el resultado:', err);
+      await interaction.editReply({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2, files: [], allowedMentions: SAFE_MENTIONS });
+    }
+  } catch (err) {
+    console.error('[Xerion] Error en /roll:', err);
+    await interaction.editReply('Something went wrong rolling — try again in a moment.');
+  }
+}
+
+async function cmdSell(interaction) {
+  await interaction.deferReply();
+  try {
+    const result = await db.sellRngItems(interaction.user.id);
+    await interaction.editReply({ components: [visuals.buildSellResultContainer(result)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  } catch (err) {
+    console.error('[Xerion] Error en /sell:', err);
+    await interaction.editReply('Something went wrong selling your items — try again in a moment.');
+  }
+}
+
+async function cmdRedeem(interaction) {
+  await interaction.deferReply();
+  try {
+    const result = await db.redeemFragments(interaction.user.id);
+    await interaction.editReply({ components: [visuals.buildRedeemResultContainer(result)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+  } catch (err) {
+    console.error('[Xerion] Error en /redeem:', err);
+    await interaction.editReply('Something went wrong redeeming your fragments — try again in a moment.');
+  }
+}
+
 async function cmdNotification(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
@@ -1609,6 +1740,9 @@ function getHeldRoleKeys(member) {
   if (member.roles.cache.has(CONFIG.ROLE_IDS.GOAT)) keys.push('GOAT');
   if (member.roles.cache.has(CONFIG.ROLE_IDS.AURA_INFINITE)) keys.push('AURA_INFINITE');
   if (member.roles.cache.has(CONFIG.ROLE_IDS.STAR_X)) keys.push('STAR_X');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.NINE_K)) keys.push('NINE_K');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.THREE_K)) keys.push('THREE_K');
+  if (member.roles.cache.has(CONFIG.ROLE_IDS.OG)) keys.push('OG');
   return keys;
 }
 
@@ -1728,16 +1862,8 @@ async function cmdStreak(interaction) {
   return sendV2(interaction, visuals.buildStreakContainer(stats, interaction.user.id));
 }
 
-async function cmdPing(interaction) {
-  return sendV2(interaction, visuals.buildPingContainer(Math.max(0, Math.round(interaction.client.ws.ping))));
-}
-
 async function cmdAbout(interaction) {
-  return sendV2(interaction, visuals.buildAboutContainer());
-}
-
-async function cmdRules(interaction) {
-  return sendV2(interaction, visuals.buildRulesContainer());
+  return sendV2(interaction, visuals.buildAboutContainer(Math.max(0, Math.round(interaction.client.ws.ping))));
 }
 
 async function handleSlashCommand(interaction) {
@@ -1759,9 +1885,10 @@ async function handleSlashCommand(interaction) {
     case 'history': return cmdHistory(interaction);
     case 'achievements': return cmdAchievements(interaction);
     case 'streak': return cmdStreak(interaction);
-    case 'ping': return cmdPing(interaction);
     case 'about': return cmdAbout(interaction);
-    case 'rules': return cmdRules(interaction);
+    case 'roll': return cmdRoll(interaction);
+    case 'sell': return cmdSell(interaction);
+    case 'redeem': return cmdRedeem(interaction);
     case 'panel-owner': return adminPanel.cmdPanelOwner(interaction, buildAdminGameApi());
     default: return interaction.reply({ content: 'Unknown command.', flags: MessageFlags.Ephemeral });
   }
@@ -1825,6 +1952,50 @@ async function prefixRates(message) {
 async function prefixShop(message) {
   const counts = await db.getShopCounts(message.author.id);
   return noPingReply(message, { components: [visuals.buildShopContainer(counts, message.author.id, getCurrentEvent())], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixRoll(message) {
+  const item = pickRngItem();
+  const column = db.RNG_ITEM_COLUMNS[item.key];
+  const result = await db.rollRng(message.author.id, column, RNG_ROLL_COST);
+
+  if (!result) {
+    const stats = await db.getUserStats(message.author.id, identityFor(message.author));
+    return noPingReply(message, { components: [visuals.buildRollNotEnoughContainer(stats.feathers || 0)], flags: MessageFlags.IsComponentsV2 });
+  }
+
+  try {
+    const iconMap = await visuals.preloadRngIcons().catch(() => null);
+    const flickerKeys = RNG_ITEM_LIST.map((i) => i.key);
+    const spinMsg = await noPingReply(message, {
+      components: [visuals.buildRollSpinContainer()],
+      flags: MessageFlags.IsComponentsV2,
+      files: [visuals.rngCardFrameAttachment(flickerKeys[randomInt(flickerKeys.length)], iconMap)],
+    });
+    for (const delay of RNG_SPIN_DELAYS_MS) {
+      await sleep(delay);
+      const flickerKey = flickerKeys[randomInt(flickerKeys.length)];
+      await spinMsg
+        .edit({ components: [visuals.buildRollSpinContainer()], flags: MessageFlags.IsComponentsV2, files: [visuals.rngCardFrameAttachment(flickerKey, iconMap)], attachments: [] })
+        .catch(() => {});
+    }
+    await spinMsg
+      .edit({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2, files: [visuals.rngCardFrameAttachment(item.key, iconMap)], attachments: [] })
+      .catch(() => {});
+  } catch (err) {
+    console.error('[Xerion] El canvas de xn roll falló, se degrada a solo el resultado:', err);
+    return noPingReply(message, { components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2 });
+  }
+}
+
+async function prefixSell(message) {
+  const result = await db.sellRngItems(message.author.id);
+  return noPingReply(message, { components: [visuals.buildSellResultContainer(result)], flags: MessageFlags.IsComponentsV2 });
+}
+
+async function prefixRedeem(message) {
+  const result = await db.redeemFragments(message.author.id);
+  return noPingReply(message, { components: [visuals.buildRedeemResultContainer(result)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixNotification(message) {
@@ -1898,16 +2069,8 @@ async function prefixStreak(message) {
   return noPingReply(message, { components: [visuals.buildStreakContainer(stats, message.author.id)], flags: MessageFlags.IsComponentsV2 });
 }
 
-async function prefixPing(message) {
-  return noPingReply(message, { components: [visuals.buildPingContainer(Math.max(0, Math.round(message.client.ws.ping)))], flags: MessageFlags.IsComponentsV2 });
-}
-
 async function prefixAbout(message) {
-  return noPingReply(message, { components: [visuals.buildAboutContainer()], flags: MessageFlags.IsComponentsV2 });
-}
-
-async function prefixRules(message) {
-  return noPingReply(message, { components: [visuals.buildRulesContainer()], flags: MessageFlags.IsComponentsV2 });
+  return noPingReply(message, { components: [visuals.buildAboutContainer(Math.max(0, Math.round(message.client.ws.ping)))], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function handlePrefixCommand(message) {
@@ -1936,9 +2099,10 @@ async function handlePrefixCommand(message) {
       case 'history': case 'historial': return await prefixHistory(message);
       case 'achievements': case 'logros': return await prefixAchievements(message);
       case 'streak': case 'racha': return await prefixStreak(message);
-      case 'ping': return await prefixPing(message);
       case 'about': case 'info': return await prefixAbout(message);
-      case 'rules': case 'reglas': return await prefixRules(message);
+      case 'roll': case 'tirar': return await prefixRoll(message);
+      case 'sell': case 'vender': return await prefixSell(message);
+      case 'redeem': case 'canjear': return await prefixRedeem(message);
       case 'help': case '': return await prefixHelp(message);
       default:
         return await noPingReply(message, { content: `Unknown command. Try \`${CONFIG.PREFIX} help\` to see everything I can do.` });

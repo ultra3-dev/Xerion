@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.4 ULTRA — visuals.js
+ *  XERION v2.0.5 ULTRA — visuals.js
  * ----------------------------------------------------------------------------
  *  Toda la capa de diseño usa Components V2 real. El flujo del cofre y todos
  *  los paneles comparten Containers, TextDisplay, Separators y botones para
@@ -50,6 +50,9 @@ const {
   PORTAL_SPAWN_CHANCE,
   EVENT_TYPES,
   EVENT_TYPE_LIST,
+  RNG_ITEMS,
+  RNG_ITEM_LIST,
+  RNG_ROLL_COST,
 } = require('./config.js');
 
 // ============================================================================
@@ -364,6 +367,9 @@ const REWARD_ICON_CODEPOINTS = {
   GOAT: '1f410',
   AURA_INFINITE: '1f30c',
   STAR_X: '2b50',
+  OG: '1f576-fe0f',
+  THREE_K: '1f48e',
+  NINE_K: '1f531',
   FEATHERS: '1f525',
   NOTHING: '1f4a8',
 };
@@ -628,7 +634,7 @@ function buildPlayerSpinContainer(chestType, attachmentName = 'player-spin.png')
 const PORTAL_W = 780;
 const PORTAL_H = 460;
 
-function drawPortalBoss(ctx, cx, cy, r, g, b) {
+function drawPortalBoss(ctx, cx, cy, r, g, b, bossIcon = null) {
   ctx.save();
   ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.9)`;
   ctx.shadowBlur = 22;
@@ -639,7 +645,7 @@ function drawPortalBoss(ctx, cx, cy, r, g, b) {
   ctx.strokeStyle = `rgba(${Math.min(255, r + 70)}, ${Math.min(255, g + 70)}, ${Math.min(255, b + 70)}, 1)`;
   ctx.lineWidth = 3;
   ctx.stroke();
-  // un par de picos arriba — silueta simple, nunca texto/emoji
+  // un par de picos arriba — silueta simple, nunca texto/emoji dibujado con fuente
   for (const dir of [-1, 1]) {
     ctx.beginPath();
     ctx.moveTo(cx + dir * 30, cy - 34);
@@ -649,9 +655,23 @@ function drawPortalBoss(ctx, cx, cy, r, g, b) {
     ctx.fill();
   }
   ctx.restore();
+  // El icono del Boss SÍ se dibuja — pero como imagen precargada (Twemoji),
+  // nunca como texto/glifo de fuente, mismo truco ya probado en los cofres.
+  if (bossIcon) {
+    ctx.drawImage(bossIcon, cx - 30, cy - 30, 60, 60);
+  }
 }
 
-function generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner = null) {
+/**
+ * `opts.defeatedIds` (Set) — quiénes ya están eliminados en ESTE frame, se
+ * dibujan apagados con un ícono de KO encima. `opts.winnerUser` — si se
+ * pasa, es la ronda final: corona encima, brillo dorado, nombre abajo.
+ * `opts.icons` — { boss, ko, crown } (Image|null), de preloadPortalIcons().
+ * Con defeatedIds vacío y sin winnerUser, se ve como "todos de pie" (frame
+ * de apertura de la pelea).
+ */
+function generatePortalBattleFrame(users, avatarMap, portalType, opts = {}) {
+  const { defeatedIds = new Set(), winnerUser = null, icons = {} } = opts;
   const canvas = createCanvas(PORTAL_W, PORTAL_H);
   const ctx = canvas.getContext('2d');
   const { r, g, b } = hexToRgb(portalType.color);
@@ -678,17 +698,18 @@ function generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner = 
     ctx.restore();
   }
 
-  drawPortalBoss(ctx, cx, cy, r, g, b);
+  drawPortalBoss(ctx, cx, cy, r, g, b, icons.boss);
 
   const n = users.length;
   const avatarRadius = ringRadius + 64;
-  const winnerIdx = forcedWinner ? users.findIndex((u) => u.id === forcedWinner.id) : -1;
+  const winnerIdx = winnerUser ? users.findIndex((u) => u.id === winnerUser.id) : -1;
 
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
     const ax = cx + Math.cos(angle) * avatarRadius;
     const ay = cy + Math.sin(angle) * avatarRadius;
     const isWinner = i === winnerIdx;
+    const isDefeated = defeatedIds.has(users[i].id);
     const size = isWinner ? 78 : 54;
     const img = avatarMap.get(users[i].id) || null;
 
@@ -703,26 +724,39 @@ function generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner = 
       ctx.restore();
     }
 
+    ctx.save();
+    if (isDefeated) ctx.globalAlpha = 0.35; // apagado — ya cayó
     if (img) {
-      ctx.save();
       ctx.beginPath();
       ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
       ctx.drawImage(img, ax - size / 2, ay - size / 2, size, size);
-      ctx.restore();
     } else {
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
       ctx.beginPath();
       ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
 
     ctx.lineWidth = isWinner ? 4 : 2;
-    ctx.strokeStyle = isWinner ? '#ffd75a' : 'rgba(255,255,255,0.4)';
+    ctx.strokeStyle = isWinner ? '#ffd75a' : isDefeated ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.4)';
     ctx.beginPath();
     ctx.arc(ax, ay, size / 2, 0, Math.PI * 2);
     ctx.stroke();
+
+    // KO como imagen (Twemoji) sobre el avatar apagado — nunca texto suelto.
+    if (isDefeated && icons.ko) {
+      const koSize = size * 0.62;
+      ctx.drawImage(icons.ko, ax - koSize / 2, ay - koSize / 2, koSize, koSize);
+    }
+
+    // Corona (imagen) flotando sobre el ganador en el frame final.
+    if (isWinner && icons.crown) {
+      const crownSize = 34;
+      ctx.drawImage(icons.crown, ax - crownSize / 2, ay - size / 2 - crownSize + 6, crownSize, crownSize);
+    }
 
     if (isWinner) {
       ctx.fillStyle = '#ffd75a';
@@ -739,8 +773,20 @@ function generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner = 
   return canvas.toBuffer('image/png');
 }
 
-function portalSpinFrameAttachment(users, avatarMap, portalType, forcedWinner = null, name = 'portal-battle.png') {
-  const buffer = generatePortalBattleFrame(users, avatarMap, portalType, forcedWinner);
+const PORTAL_ICON_CODEPOINTS = { boss: '1f47f', ko: '1f480', crown: '1f451' };
+
+/** Precarga (y cachea) los 3 iconos que usa la pelea del portal: cara del Boss, KO, y corona del ganador. */
+async function preloadPortalIcons() {
+  const [boss, ko, crown] = await Promise.all([
+    loadEmojiImage(PORTAL_ICON_CODEPOINTS.boss),
+    loadEmojiImage(PORTAL_ICON_CODEPOINTS.ko),
+    loadEmojiImage(PORTAL_ICON_CODEPOINTS.crown),
+  ]);
+  return { boss, ko, crown };
+}
+
+function portalSpinFrameAttachment(users, avatarMap, portalType, opts = {}, name = 'portal-battle.png') {
+  const buffer = generatePortalBattleFrame(users, avatarMap, portalType, opts);
   return new AttachmentBuilder(buffer, { name });
 }
 
@@ -957,6 +1003,74 @@ function buildEventEndedContainer(eventType) {
     );
 }
 
+/** Encabezado del anuncio de /roll — se manda antes de animar la carta. */
+function buildRollSpinContainer(attachmentName = 'rng-card.png') {
+  return new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.RNG_RARO)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# 🎰 Tirando...'))
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)));
+}
+
+/** Resultado final de /roll: qué salió, y tu nuevo saldo de Feathers. */
+function buildRollResultContainer(item, feathersLeft, attachmentName = 'rng-card.png') {
+  return new ContainerBuilder()
+    .setAccentColor(item.color)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${item.emoji} ¡Salió ${item.name}!\n-# Rareza: **${item.tier}** · vale \`${item.fragments}\` Fragmentos si lo vendés`))
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`**${FEATHER_EMOJI} Te quedan:** \`${formatNumber(feathersLeft)}\` Feathers · usa \`/sell\` cuando quieras vender tu inventario`),
+    );
+}
+
+/** /roll sin Feathers suficientes. */
+function buildRollNotEnoughContainer(feathers) {
+  return buildSimpleContainer(
+    'No te alcanza',
+    `Tirar cuesta ${RNG_ROLL_COST} ${FEATHER_EMOJI}`,
+    [`Tenés \`${formatNumber(feathers)}\` Feathers ahora mismo.`, 'Conseguí más con `/daily`, `/claim`, cofres o portales.'],
+    CONFIG.COLORS.NOTHING,
+  );
+}
+
+/** Resultado de /sell — vendiste todo tu inventario de RNG por Fragmentos. */
+function buildSellResultContainer(result) {
+  if (result.totalItems === 0) {
+    return buildSimpleContainer('Nada para vender', 'Tu inventario de RNG está vacío', ['Usa `/roll` para conseguir objetos primero.'], CONFIG.COLORS.NOTHING);
+  }
+  const lines = RNG_ITEM_LIST.filter((item) => result.sold[item.key] > 0).map(
+    (item) => `${item.emoji} **${item.name}** ×${result.sold[item.key]} → \`${result.sold[item.key] * item.fragments}\` Fragmentos`,
+  );
+  return new ContainerBuilder()
+    .setAccentColor(CONFIG.COLORS.RNG_EPICO)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# 💰 Vendiste ${result.totalItems} objeto(s)`))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')))
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `**+${formatNumber(result.totalFragments)}** Fragmentos ganados`,
+          `**Saldo total de Fragmentos:** \`${formatNumber(result.newFragmentsBalance)}\``,
+          '-# Usa `/redeem` para canjear tus Fragmentos por Feathers.',
+        ].join('\n'),
+      ),
+    );
+}
+
+/** Resultado de /redeem — canjeaste Fragmentos por Feathers. */
+function buildRedeemResultContainer(result) {
+  if (result.redeemed === 0) {
+    return buildSimpleContainer('No tenés Fragmentos', 'Vendé objetos de RNG primero', ['Usa `/roll` para conseguir objetos y `/sell` para venderlos por Fragmentos.'], CONFIG.COLORS.NOTHING);
+  }
+  return buildSimpleContainer(
+    '💱 Canje completado',
+    `${result.redeemed} Fragmentos canjeados`,
+    [`**+${formatNumber(result.feathersGained)}** ${FEATHER_EMOJI} Feathers agregadas a tu saldo.`],
+    CONFIG.COLORS.FEATHERS,
+  );
+}
+
 /** Panel de /event — muestra el evento activo (si hay) o que no hay ninguno. */
 function buildEventStatusContainer(activeEvent) {
   if (!activeEvent) {
@@ -981,6 +1095,139 @@ function eventBannerLine(activeEvent) {
 }
 
 // ============================================================================
+// MOTOR DE CANVAS — RNG (/roll). Cuarta identidad visual, a propósito
+// distinta de las otras tres: una carta VERTICAL tipo gacha (ni tira
+// horizontal, ni ring, ni ruleta circular), con un orbe brillante en el
+// centro y el icono del objeto adentro. Más rareza = más brillo y más
+// destellos alrededor — "Secreto" enciende toda la carta.
+// ============================================================================
+
+const RNG_CARD_W = 420;
+const RNG_CARD_H = 560;
+const RNG_ICON_CODEPOINTS = {
+  COMUN: '2699-fe0f',
+  POCO_COMUN: '1f527',
+  RARO: '1f537',
+  EPICO: '1f7e3',
+  LEGENDARIO: '1f7e0',
+  MITICO: '1f534',
+  SECRETO: '2728',
+};
+
+async function preloadRngIcons() {
+  const entries = await Promise.all(
+    RNG_ITEM_LIST.map(async (item) => [item.key, await loadEmojiImage(RNG_ICON_CODEPOINTS[item.key])]),
+  );
+  return new Map(entries);
+}
+
+function drawSparkle(ctx, x, y, size, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.28, -size * 0.28);
+  ctx.lineTo(size, 0);
+  ctx.lineTo(size * 0.28, size * 0.28);
+  ctx.lineTo(0, size);
+  ctx.lineTo(-size * 0.28, size * 0.28);
+  ctx.lineTo(-size, 0);
+  ctx.lineTo(-size * 0.28, -size * 0.28);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Dibuja la carta ya "revelada" para itemKey (o un tramo al azar si
+ * itemKey es null, para el efecto de flicker antes de la revelación
+ * final). rarityIndex es la posición del tramo en RNG_ITEM_LIST (0 = más
+ * común) — se usa para escalar cuántos destellos y cuánto brillo tiene la
+ * carta, así "Secreto" se ve dramáticamente distinto de "Común".
+ */
+function generateRngCardFrame(itemKey, iconMap = null) {
+  const item = RNG_ITEMS[itemKey] || RNG_ITEM_LIST[0];
+  const rarityIndex = RNG_ITEM_LIST.findIndex((i) => i.key === item.key);
+  const intensity = rarityIndex / (RNG_ITEM_LIST.length - 1); // 0 (Común) .. 1 (Secreto)
+
+  const canvas = createCanvas(RNG_CARD_W, RNG_CARD_H);
+  const ctx = canvas.getContext('2d');
+  const { r, g, b } = hexToRgb(item.color);
+  const cx = RNG_CARD_W / 2;
+  const cy = RNG_CARD_H / 2 - 30;
+
+  const bg = ctx.createRadialGradient(cx, cy, 10, cx, cy, RNG_CARD_H * 0.75);
+  bg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.25 + intensity * 0.35})`);
+  bg.addColorStop(1, '#0a0a0f');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, RNG_CARD_W, RNG_CARD_H);
+
+  // Marco tipo carta, con esquinas — bisel más grueso mientras más raro.
+  ctx.save();
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.6 + intensity * 0.4})`;
+  ctx.shadowBlur = 16 + intensity * 26;
+  ctx.strokeStyle = `rgba(${Math.min(255, r + 50)}, ${Math.min(255, g + 50)}, ${Math.min(255, b + 50)}, 0.95)`;
+  ctx.lineWidth = 4 + intensity * 3;
+  roundRectPath(ctx, 18, 18, RNG_CARD_W - 36, RNG_CARD_H - 36, 24);
+  ctx.stroke();
+  ctx.restore();
+
+  // Destellos alrededor — cuantos más, más raro el objeto.
+  const sparkleCount = Math.round(4 + intensity * 14);
+  for (let i = 0; i < sparkleCount; i++) {
+    const angle = (i / sparkleCount) * Math.PI * 2 + intensity;
+    const dist = 190 + (i % 3) * 14;
+    const sx = cx + Math.cos(angle) * dist * 0.62;
+    const sy = cy + Math.sin(angle) * dist * 0.78;
+    const size = 4 + Math.random() * (3 + intensity * 5);
+    drawSparkle(ctx, sx, sy, size, `rgba(${Math.min(255, r + 80)}, ${Math.min(255, g + 80)}, ${Math.min(255, b + 80)}, ${0.5 + Math.random() * 0.4})`);
+  }
+
+  // Orbe central.
+  const orbR = 92;
+  const orb = ctx.createRadialGradient(cx - 20, cy - 20, 6, cx, cy, orbR);
+  orb.addColorStop(0, `rgba(${Math.min(255, r + 90)}, ${Math.min(255, g + 90)}, ${Math.min(255, b + 90)}, 1)`);
+  orb.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.9)`);
+  ctx.save();
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 1)`;
+  ctx.shadowBlur = 30 + intensity * 40;
+  ctx.fillStyle = orb;
+  ctx.beginPath();
+  ctx.arc(cx, cy, orbR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, orbR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const icon = iconMap?.get(item.key) || null;
+  if (icon) {
+    const iconSize = 88;
+    ctx.drawImage(icon, cx - iconSize / 2, cy - iconSize / 2, iconSize, iconSize);
+  }
+
+  // Nombre del tramo de rareza, abajo de la carta.
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${22 + intensity * 4}px sans-serif`;
+  ctx.fillStyle = `rgba(${Math.min(255, r + 70)}, ${Math.min(255, g + 70)}, ${Math.min(255, b + 70)}, 1)`;
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.9)`;
+  ctx.shadowBlur = 14;
+  ctx.fillText(item.tier.toUpperCase(), cx, cy + orbR + 56);
+  ctx.restore();
+
+  return canvas.toBuffer('image/png');
+}
+
+function rngCardFrameAttachment(itemKey, iconMap = null, name = 'rng-card.png') {
+  const buffer = generateRngCardFrame(itemKey, iconMap);
+  return new AttachmentBuilder(buffer, { name });
+}
+
+// ============================================================================
 // COMPONENTS V2 — flujo del cofre (aparición, eliminación, apertura).
 // ============================================================================
 
@@ -997,7 +1244,10 @@ function buildRewardsFieldValue(table) {
 /** Panel de aparición del cofre con estadísticas editables en tiempo real. `activeEvent`/`stepMessages` son opcionales — solo importan si hay un evento global activo. */
 function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, disabled = false, mapKey = '', activeEvent = null, stepMessages = CONFIG.PROBABILITY_STEP_MESSAGES }) {
   const table = chestType.rewardTable;
-  const arise = table.find((r) => r.key === 'ARISE');
+  // La "mejor recompensa" es el rol con menos % en ESTA tabla — genérico a
+  // propósito, así funciona igual para los 5 roles de siempre que para los
+  // 3 exclusivos del Cofre OG (que no comparten ninguna key con los otros).
+  const bestRole = table.filter((r) => r.kind === 'role').reduce((best, r) => (!best || r.chance < best.chance ? r : best), null);
   const feathers = table.find((r) => r.key === 'FEATHERS');
   const nothing = table.find((r) => r.key === 'NOTHING');
   const chance = computeSpawnChance(serverStats.messages_since_chest || 0, stepMessages);
@@ -1031,7 +1281,7 @@ function buildChestEmbed({ chestType, participantCount, endsAt, serverStats, dis
       new TextDisplayBuilder().setContent(
         [
           `**${chestType.emoji} Tipo:** ${chestType.name} · \`${chestType.tierLabel}\``,
-          `**🏆 Mejor recompensa:** ${arise.emoji} ${arise.label} · \`${arise.chance}%\``,
+          `**🏆 Mejor recompensa:** ${bestRole.emoji} ${bestRole.label} · \`${bestRole.chance}%\``,
           `**${FEATHER_EMOJI} Feathers:** \`${formatFeatherRange(feathers)}\` si no sale un rol`,
           `**📉 Nada:** \`${nothing.chance}%\``,
           `**⏳ Cierra:** <t:${Math.floor(endsAt / 1000)}:R>`,
@@ -1140,15 +1390,18 @@ function buildPortalEmbed({ portalType, participants, pot, endsAt, disabled = fa
     );
 }
 
-function buildPortalBattleContainer(portalType, attachmentName = 'portal-battle.png') {
-  return new ContainerBuilder()
+function buildPortalBattleContainer(portalType, caption = null, attachmentName = 'portal-battle.png') {
+  const container = new ContainerBuilder()
     .setAccentColor(portalType.color)
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`# ${portalType.emoji} El Boss de ${portalType.name} está eliminando contendientes...`),
-    )
-    .addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
     );
+  if (caption) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(caption));
+  }
+  return container.addMediaGalleryComponents(
+    new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)),
+  );
 }
 
 function buildPortalResultEmbed(payout, portalType) {
@@ -1222,6 +1475,9 @@ const RESULT_FLAVOR = {
   GOAT: 'El tercer trono también es tuyo. Muy pocos llegan a esta altura.',
   AURA_INFINITE: 'Pocos llegan tan lejos. Hoy la suerte estuvo de tu lado.',
   STAR_X: 'Tu primera estrella. El comienzo de algo más grande.',
+  NINE_K: 'Nueve mil motivos para sonreír. Ni el Abismo se compara con esto.',
+  THREE_K: 'Tres mil razones para presumir. El Cofre OG no regala esto fácil.',
+  OG: 'El cofre más raro del servidor te reconoce. Esto no le pasa a cualquiera.',
   FEATHERS: 'No es el premio mayor, pero suma para la próxima — o para la tienda.',
   NOTHING: 'El cofre estaba vacío para ti esta vez. Así de cruel es Xerion.',
 };
@@ -1260,7 +1516,16 @@ function buildResultEmbed(reward, winnerId, roleGranted, chestType, luckBoosted,
 // estos paneles con allowedMentions: SAFE_MENTIONS.
 // ============================================================================
 
-const ROLE_LABELS = { ARISE: 'ARISE 💀', KING: 'KING 👑', GOAT: 'GOAT 🐐', AURA_INFINITE: 'AURA INFINITE 🌌', STAR_X: 'STAR X ⭐' };
+const ROLE_LABELS = {
+  ARISE: 'ARISE 💀',
+  KING: 'KING 👑',
+  GOAT: 'GOAT 🐐',
+  AURA_INFINITE: 'AURA INFINITE 🌌',
+  STAR_X: 'STAR X ⭐',
+  NINE_K: '9K 🔱',
+  THREE_K: '3K 💎',
+  OG: 'OG 🕶️',
+};
 
 /** Línea que muestra el beneficio activo de rol (según el más raro que tenga el usuario). */
 function roleBenefitLine(stats, heldRoleKeys = []) {
@@ -1329,6 +1594,9 @@ function buildProfileContainer(stats, discordUser, heldRoleKeys = []) {
           `🐐 **GOAT:** ${formatNumber(stats.goat_count)}${heldRoleKeys.includes('GOAT') ? ' ✅' : ''}`,
           `👑 **KING:** ${formatNumber(stats.king_count)}${heldRoleKeys.includes('KING') ? ' ✅' : ''}`,
           `💀 **ARISE:** ${formatNumber(stats.arise_count)}${heldRoleKeys.includes('ARISE') ? ' ✅' : ''}`,
+          `🔱 **9K:** ${formatNumber(stats.nine_k_count)}${heldRoleKeys.includes('NINE_K') ? ' ✅' : ''}`,
+          `💎 **3K:** ${formatNumber(stats.three_k_count)}${heldRoleKeys.includes('THREE_K') ? ' ✅' : ''}`,
+          `🕶️ **OG:** ${formatNumber(stats.og_count)}${heldRoleKeys.includes('OG') ? ' ✅' : ''}`,
         ].join('\n'),
       ),
     )
@@ -1400,7 +1668,7 @@ function buildLeaderboardContainer(rows, page = 0, totalPages = 1, ownerId = '')
 function buildRatesContainer() {
   const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.ARISE)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# Chest Odds\n-# Las probabilidades de los 3 tipos de cofre — el sistema es difícil a propósito'));
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# Chest Odds\n-# Las probabilidades de los 4 tipos de cofre — el sistema es difícil a propósito'));
 
   for (const type of CHEST_TYPE_LIST) {
     container
@@ -1625,9 +1893,12 @@ function buildHelpContainer() {
           '`/inventory` [`xn inv`] — balance rápido',
           '`/cooldowns` [`xn cooldowns`] — cuándo se recarga tu /daily y el ingreso de cada rol que tenés',
           '`/leaderboard` [`xn top`] — top Feather holders',
-          '`/rates` [`xn rates`] — probabilidades de los 3 tipos de cofre',
+          '`/rates` [`xn rates`] — probabilidades de los 4 tipos de cofre',
           '`/portals` [`xn portals`] — los 3 rangos de portal y cuánto reparte cada uno',
           '`/event` [`xn event`] — si hay un evento global activo ahora mismo',
+          '`/roll` [`xn roll`] — tira por un objeto de RNG al azar (cuesta Feathers)',
+          '`/sell` [`xn sell`] — vende todo tu inventario de RNG por Fragmentos',
+          '`/redeem` [`xn redeem`] — canjea tus Fragmentos por Feathers',
           '`/shop` [`xn shop`] — gasta tus Feathers en objetos (máximo 5, siempre)',
           '`/notification` [`xn notif`] — activa o desactiva los DM de cofre',
           '`/stats` [`xn stats`] — estadísticas del servidor',
@@ -1638,9 +1909,7 @@ function buildHelpContainer() {
            '`/history` [`xn history`] — últimas recompensas obtenidas',
            '`/achievements` [`xn achievements`] — logros desbloqueados',
            '`/streak` [`xn streak`] — tu racha de dailies, y si se muestra en tu apodo',
-           '`/ping` [`xn ping`] — latencia actual del bot',
-           '`/about` [`xn about`] — versión y estado de Xerion',
-           '`/rules` [`xn rules`] — reglas rápidas del juego',
+           '`/about` [`xn about`] — versión, estado y latencia de Xerion',
         ].join('\n'),
       ),
     )
@@ -1963,25 +2232,17 @@ function buildStreakContainer(stats, ownerId = '') {
   return addTipFooter(container);
 }
 
-function buildPingContainer(latency) {
-  return buildSimpleContainer('Pong', 'Conexión con Discord', [`⚡ **Latencia del bot:** ${latency} ms`, '✅ Xerion está respondiendo.'], CONFIG.COLORS.KING);
-}
-
-function buildAboutContainer() {
+function buildAboutContainer(pingMs = null) {
   return buildSimpleContainer(
     'Xerion',
     `v${CONFIG.VERSION} · Components V2`,
-    ['Cofres difíciles, eliminación por rondas y recompensas persistentes.', 'Los contadores de probabilidad están separados por canal.', 'El progreso de usuarios se conserva entre reinicios.'],
+    [
+      'Cofres difíciles, eliminación por rondas y recompensas persistentes.',
+      'Los contadores de probabilidad están separados por canal.',
+      'El progreso de usuarios se conserva entre reinicios.',
+      pingMs !== null ? `📡 Latencia actual: \`${pingMs}ms\`` : null,
+    ].filter(Boolean),
     CONFIG.COLORS.BRAND,
-  );
-}
-
-function buildRulesContainer() {
-  return buildSimpleContainer(
-    'Reglas',
-    'Cómo sobrevivir',
-    ['1. Cada 100 mensajes del canal, la probabilidad sube 1%.', '2. Entra al cofre antes de que cierre.', '3. La eliminación decide un único superviviente.', '4. El superviviente abre el cofre y recibe una recompensa.', '5. Usa `/shop` para comprar Escudos y Amuletos.'],
-    CONFIG.COLORS.ARISE,
   );
 }
 
@@ -1994,6 +2255,7 @@ module.exports = {
   playerSpinFrameAttachment,
   buildPlayerSpinContainer,
   portalSpinFrameAttachment,
+  preloadPortalIcons,
   buildPortalEmbed,
   buildPortalBattleContainer,
   buildPortalResultEmbed,
@@ -2027,12 +2289,17 @@ module.exports = {
   buildEventWheelContainer,
   buildEventResultContainer,
   buildEventEndedContainer,
+  buildRollSpinContainer,
+  buildRollResultContainer,
+  buildRollNotEnoughContainer,
+  buildSellResultContainer,
+  buildRedeemResultContainer,
+  rngCardFrameAttachment,
+  preloadRngIcons,
   buildEventStatusContainer,
   eventWheelFrameAttachment,
   preloadEventIcons,
   buildChestStatusContainer,
   buildStreakContainer,
-  buildPingContainer,
   buildAboutContainer,
-  buildRulesContainer,
 };

@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.4 ULTRA — database.js
+ *  XERION v2.0.5 ULTRA — database.js
  * ----------------------------------------------------------------------------
  *  Todo lo persistente vive aquí (PostgreSQL / Neon): usuarios, contador de
  *  mensajes, probabilidad dinámica, notificaciones de cofre y tienda.
@@ -16,7 +16,7 @@
 'use strict';
 
 const { Pool } = require('pg');
-const { CONFIG, SHOP_ITEMS, totalFeatherMultiplier, ROLE_PASSIVE_INCOME } = require('./config.js');
+const { CONFIG, SHOP_ITEMS, totalFeatherMultiplier, ROLE_PASSIVE_INCOME, RNG_ITEM_LIST, RNG_FRAGMENT_TO_FEATHERS } = require('./config.js');
 
 const pool = new Pool({
   connectionString: CONFIG.DATABASE_URL,
@@ -44,6 +44,9 @@ const XERION_USERS_COLUMNS = [
   ['goat_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['star_x_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['arise_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['nine_k_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['three_k_count', 'INTEGER NOT NULL DEFAULT 0'],
+  ['og_count', 'INTEGER NOT NULL DEFAULT 0'],
   ['shields', 'INTEGER NOT NULL DEFAULT 0'],
   ['luck_charms', 'INTEGER NOT NULL DEFAULT 0'],
   ['revives', 'INTEGER NOT NULL DEFAULT 0'],
@@ -59,6 +62,19 @@ const XERION_USERS_COLUMNS = [
   ['goat_income_at', 'TIMESTAMPTZ'],
   ['king_income_at', 'TIMESTAMPTZ'],
   ['arise_income_at', 'TIMESTAMPTZ'],
+  ['nine_k_income_at', 'TIMESTAMPTZ'],
+  ['three_k_income_at', 'TIMESTAMPTZ'],
+  ['og_income_at', 'TIMESTAMPTZ'],
+  // RNG (/roll, /sell, /redeem) — inventario por rareza + Fragmentos. Todo
+  // aditivo, mismo patrón que el resto de la tabla.
+  ['rng_comun', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_poco_comun', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_raro', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_epico', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_legendario', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_mitico', 'INTEGER NOT NULL DEFAULT 0'],
+  ['rng_secreto', 'INTEGER NOT NULL DEFAULT 0'],
+  ['fragments', 'INTEGER NOT NULL DEFAULT 0'],
   ['created_at', 'TIMESTAMPTZ NOT NULL DEFAULT NOW()'],
 ];
 
@@ -69,6 +85,20 @@ const ROLE_INCOME_COLUMNS = {
   GOAT: { count: 'goat_count', at: 'goat_income_at' },
   KING: { count: 'king_count', at: 'king_income_at' },
   ARISE: { count: 'arise_count', at: 'arise_income_at' },
+  NINE_K: { count: 'nine_k_count', at: 'nine_k_income_at' },
+  THREE_K: { count: 'three_k_count', at: 'three_k_income_at' },
+  OG: { count: 'og_count', at: 'og_income_at' },
+};
+
+// Mapeo objeto de RNG -> columna de inventario (ver RNG_ITEMS en config.js).
+const RNG_ITEM_COLUMNS = {
+  COMUN: 'rng_comun',
+  POCO_COMUN: 'rng_poco_comun',
+  RARO: 'rng_raro',
+  EPICO: 'rng_epico',
+  LEGENDARIO: 'rng_legendario',
+  MITICO: 'rng_mitico',
+  SECRETO: 'rng_secreto',
 };
 
 const XERION_STATE_COLUMNS = [
@@ -280,13 +310,7 @@ async function applyRewardToUser(userId, reward) {
       [userId, reward.amount],
     );
   } else if (reward.kind === 'role') {
-    const column = {
-      AURA_INFINITE: 'aura_infinite_count',
-      KING: 'king_count',
-      GOAT: 'goat_count',
-      ARISE: 'arise_count',
-      STAR_X: 'star_x_count',
-    }[reward.key];
+    const column = ROLE_INCOME_COLUMNS[reward.key]?.count;
     if (column) await pool.query(`UPDATE xerion_users SET ${column} = ${column} + 1 WHERE user_id = $1;`, [userId]);
   }
   // 'none' no toca la fila — no le tocó nada, literalmente.
@@ -343,13 +367,7 @@ async function settleChestReward(chestId, userId, reward, channelId = null, held
         [userId, reward.amount],
       );
     } else if (reward.kind === 'role') {
-      const roleColumn = {
-        AURA_INFINITE: 'aura_infinite_count',
-        KING: 'king_count',
-        GOAT: 'goat_count',
-        ARISE: 'arise_count',
-        STAR_X: 'star_x_count',
-      }[reward.key];
+      const roleColumn = ROLE_INCOME_COLUMNS[reward.key]?.count;
       if (roleColumn) {
         // El reloj de ingreso pasivo arranca la primera vez que se gana el rol
         // (COALESCE no lo toca en victorias siguientes del mismo rol).
@@ -680,6 +698,71 @@ async function buyTimeSkip(userId, cost = SHOP_ITEMS.TIME_SKIP.cost) {
   return buyShopItem(userId, 'time_skips', cost);
 }
 
+// ============================================================================
+// RNG (/roll, /sell, /redeem) — ver RNG_ITEMS/pickRngItem en config.js.
+// El azar se decide SIEMPRE en config.js (función pura); acá solo se
+// persiste lo que ya se decidió, mismo reparto de responsabilidades que
+// el resto del bot.
+// ============================================================================
+
+/** Descuenta el costo de tirar y suma 1 al item ya elegido (por config.pickRngItem). null = no le alcanzaban las Feathers. */
+async function rollRng(userId, itemColumn, cost) {
+  await ensureUser(userId);
+  const { rows } = await pool.query(
+    `UPDATE xerion_users
+     SET feathers = feathers - $2, total_feathers_spent = total_feathers_spent + $2, ${itemColumn} = ${itemColumn} + 1
+     WHERE user_id = $1 AND feathers >= $2
+     RETURNING feathers, ${Object.values(RNG_ITEM_COLUMNS).join(', ')};`,
+    [userId, cost],
+  );
+  return rows[0] || null;
+}
+
+/** Vende TODO el inventario de RNG de una vez por Fragmentos. Devuelve el detalle de lo vendido y el nuevo saldo. */
+async function sellRngItems(userId) {
+  await ensureUser(userId);
+  const { rows } = await pool.query(`SELECT ${Object.values(RNG_ITEM_COLUMNS).join(', ')} FROM xerion_users WHERE user_id = $1;`, [userId]);
+  const inv = rows[0] || {};
+
+  const sold = {};
+  let totalFragments = 0;
+  let totalItems = 0;
+  for (const item of RNG_ITEM_LIST) {
+    const count = inv[RNG_ITEM_COLUMNS[item.key]] || 0;
+    if (count > 0) {
+      sold[item.key] = count;
+      totalFragments += count * item.fragments;
+      totalItems += count;
+    }
+  }
+
+  if (totalItems === 0) return { sold, totalItems: 0, totalFragments: 0, newFragmentsBalance: null };
+
+  const resetClauses = Object.values(RNG_ITEM_COLUMNS)
+    .map((col) => `${col} = 0`)
+    .join(', ');
+  const { rows: updated } = await pool.query(
+    `UPDATE xerion_users SET fragments = fragments + $2, ${resetClauses} WHERE user_id = $1 RETURNING fragments;`,
+    [userId, totalFragments],
+  );
+  return { sold, totalItems, totalFragments, newFragmentsBalance: updated[0]?.fragments ?? null };
+}
+
+/** Canjea TODOS los Fragmentos que tengas por Feathers, al ritmo de RNG_FRAGMENT_TO_FEATHERS. */
+async function redeemFragments(userId) {
+  await ensureUser(userId);
+  const { rows } = await pool.query(`SELECT fragments FROM xerion_users WHERE user_id = $1;`, [userId]);
+  const fragments = rows[0]?.fragments || 0;
+  if (fragments <= 0) return { redeemed: 0, feathersGained: 0 };
+
+  const feathersGained = Math.floor(fragments * RNG_FRAGMENT_TO_FEATHERS);
+  await pool.query(
+    `UPDATE xerion_users SET fragments = 0, feathers = feathers + $2, total_feathers_earned = total_feathers_earned + $2 WHERE user_id = $1;`,
+    [userId, feathersGained],
+  );
+  return { redeemed: fragments, feathersGained };
+}
+
 /** Consume un Amuleto contra el Vacío si tiene uno disponible. Devuelve true si se consumió (y por lo tanto aplica). */
 async function consumeVoidWardIfAvailable(userId) {
   const { rows } = await pool.query(
@@ -919,4 +1002,8 @@ module.exports = {
   resetUserData,
   getRecentAwards,
   ROLE_INCOME_COLUMNS,
+  RNG_ITEM_COLUMNS,
+  rollRng,
+  sellRngItems,
+  redeemFragments,
 };

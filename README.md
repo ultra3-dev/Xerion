@@ -1,4 +1,4 @@
-# Xerion v2.0.4 ULTRA
+# Xerion v2.0.5 ULTRA
 
 Bot de Discord (`index.js` + módulos): un cofre puede aparecer en cualquier momento, todos entran pensando que es un sorteo normal, pero en realidad es una eliminación tipo "último en pie" — solo quien sobrevive tiene la oportunidad de abrirlo. Además, cada hora puede abrirse un **Portal** (apuesta con Feathers, estilo Solo Leveling) y el owner puede activar **Eventos Globales** temporales desde `/panel-owner`. Hecho con **discord.js v14 (Components V2)**, **Express**, **PostgreSQL (Neon)** y **@napi-rs/canvas**.
 
@@ -7,9 +7,10 @@ Bot de Discord (`index.js` + módulos): un cofre puede aparecer en cualquier mom
 1. En el canal configurado la probabilidad empieza en 0% y sube 1% por cada 100 mensajes sin cofre. El contador es exclusivo de ese canal y se conserva en PostgreSQL.
 2. Todos pulsan **Participate**. Tienen 5 minutos.
 3. Cuando el tiempo se acaba, empieza la eliminación: uno por uno (o por lotes si hay mucha gente), narrada mensaje por mensaje, hasta que queda un solo sobreviviente.
-4. El sobreviviente pulsa **Open**: animación de ruleta con canvas y un resultado — un rol exclusivo, algo de la moneda del bot (Feathers 🐦‍🔥), o nada.
-5. Además, cada hora hay una probabilidad de que se abra un **Portal** (3 rangos: E/B/S) en su propio canal — se apuesta Feathers para entrar, el Boss va eliminando participantes, y quien sobrevive se lleva la mayor parte del pozo. El owner puede forzar uno específico desde `/panel-owner`.
+4. El sobreviviente pulsa **Open**: animación de ruleta con canvas y un resultado — un rol exclusivo, algo de la moneda del bot (Feathers 🐦‍🔥), o nada. Hay 4 tipos de cofre (Ceniza, Brasa, Abismo y el **Cofre OG**, muchísimo más raro que el Abismo, con 3 roles totalmente propios — 9K, 3K y OG — que no comparten nada con los otros 5).
+5. Además, cada hora hay una probabilidad de que se abra un **Portal** (3 rangos: E/B/S) en su propio canal — se apuesta Feathers para entrar y el Boss va eliminando participantes EN RONDAS reales (con su propia narración y canvas, no un solo flash), hasta que queda un sobreviviente que se lleva la mayor parte del pozo. El owner puede forzar uno específico desde `/panel-owner`.
 6. El owner también puede activar un **Evento Global** (10 posibles, ponderados como los roles) desde `/panel-owner` — una ruleta Canvas distinta anuncia cuál tocó, y su efecto (más suerte, más Feathers, cofres más frecuentes, etc.) dura entre 10 y 20 minutos para todo el servidor.
+7. Aparte de todo eso, `/roll` es un minijuego de objetos al azar (estilo "RNG" de Roblox): pagás Feathers por tirar, y podés sacar desde chatarra común hasta un objeto "Secreto" (1 entre 10.000 tiradas). `/sell` vende todo tu inventario por Fragmentos, y `/redeem` canjea esos Fragmentos por Feathers.
 
 ## 1. Crear la aplicación en Discord
 
@@ -86,5 +87,5 @@ La página principal (`/`) es la web informativa — solo información sobre el 
 
 ## Comandos
 
-**Slash:** `/panel-owner` (solo dueño — forzar cofres, forzar portales, activar/cancelar evento), `/profile [usuario]`, `/inventory`, `/cooldowns`, `/leaderboard`, `/rates`, `/portals`, `/event`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/streak`, `/ping`, `/about`, `/rules`
-**Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn portales`, `xn evento` y `xn reglas`.
+**Slash:** `/panel-owner` (solo dueño — forzar cofres, forzar portales, activar/cancelar evento), `/profile [usuario]`, `/inventory`, `/cooldowns`, `/leaderboard`, `/rates`, `/portals`, `/event`, `/roll`, `/sell`, `/redeem`, `/shop`, `/notification`, `/stats`, `/help`, `/chest`, `/daily`, `/claim`, `/history`, `/achievements`, `/streak`, `/about`
+**Prefijo (`xn`):** todos los comandos anteriores también funcionan con `xn` y alias en español como `xn top`, `xn cofre`, `xn diario`, `xn logros`, `xn portales`, `xn evento`, `xn tirar`, `xn vender` y `xn canjear`.

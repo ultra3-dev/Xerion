@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  XERION v2.0.4 ULTRA — config.js
+ *  XERION v2.0.5 ULTRA — config.js
  * ----------------------------------------------------------------------------
  *  Todo lo ajustable a tu servidor, las tablas de recompensas de los 3 tipos
  *  de cofre, la tienda de objetos y las utilidades puras (sin dependencias de
@@ -13,7 +13,7 @@
 
 const CONFIG = {
   BOT_NAME: 'Xerion',
-  VERSION: '2.0.4 ULTRA',
+  VERSION: '2.0.5 ULTRA',
   PREFIX: 'xn',
 
   // Secretos / infraestructura — se leen del entorno, nunca se hardcodean.
@@ -37,6 +37,12 @@ const CONFIG = {
     GOAT: '1537232162246496346',
     ARISE: '1531512361104572507',
     STAR_X: '1489704408538415184',
+    // Exclusivos del Cofre OG — mismo trato que los 5 de arriba en todo
+    // (income pasivo, bonus de Feathers, /profile, /cooldowns): si se
+    // pierde el rol en Discord, se pierde el beneficio, igual que siempre.
+    NINE_K: '1489704438489677994',
+    THREE_K: '1489704434958077952',
+    OG: '1489704431518744666',
     BLACKLIST: '1501082061166084237',
   },
 
@@ -80,14 +86,25 @@ const CONFIG = {
     GOAT: 0xcd7f32,
     ARISE: 0x9d0208,
     STAR_X: 0x5bc0de,
+    NINE_K: 0x38bdf8,
+    THREE_K: 0xfacc15,
+    OG: 0x0a0a0a,
     NOTHING: 0x57534e,
     DARK: 0x1a1410,
     CENIZA: 0x9a958c,
     BRASA: 0xff6b35,
     ABISMO: 0x3b0764,
+    OG_CHEST: 0xd946ef,
     PORTAL_E: 0x2dd4bf,
     PORTAL_B: 0x7c3aed,
     PORTAL_S: 0xdc2626,
+    RNG_COMUN: 0x9ca3af,
+    RNG_POCO_COMUN: 0x4ade80,
+    RNG_RARO: 0x38bdf8,
+    RNG_EPICO: 0xa855f7,
+    RNG_LEGENDARIO: 0xf59e0b,
+    RNG_MITICO: 0xef4444,
+    RNG_SECRETO: 0xffffff,
   },
 };
 
@@ -145,6 +162,37 @@ function buildRewardTable(t) {
   ];
 }
 
+/**
+ * Tabla de recompensas exclusiva del Cofre OG — 3 roles totalmente
+ * distintos de los otros cofres (9K, 3K, OG), cada uno con su propio
+ * income pasivo y bonus de Feathers (ver ROLE_FEATHER_BONUS/ROLE_PASSIVE_INCOME
+ * más abajo). A propósito una función separada de buildRewardTable: así
+ * CENIZA/BRASA/ABISMO no se tocan para nada.
+ */
+function buildOgRewardTable(t) {
+  return [
+    {
+      key: 'OG', label: 'OG', emoji: '🕶️', chance: t.og, color: CONFIG.COLORS.OG,
+      kind: 'role', roleId: CONFIG.ROLE_IDS.OG, mention: `<@&${CONFIG.ROLE_IDS.OG}>`,
+    },
+    {
+      key: 'THREE_K', label: '3K', emoji: '💎', chance: t.threeK, color: CONFIG.COLORS.THREE_K,
+      kind: 'role', roleId: CONFIG.ROLE_IDS.THREE_K, mention: `<@&${CONFIG.ROLE_IDS.THREE_K}>`,
+    },
+    {
+      key: 'NINE_K', label: '9K', emoji: '🔱', chance: t.nineK, color: CONFIG.COLORS.NINE_K,
+      kind: 'role', roleId: CONFIG.ROLE_IDS.NINE_K, mention: `<@&${CONFIG.ROLE_IDS.NINE_K}>`,
+    },
+    {
+      key: 'FEATHERS', label: 'Feathers', emoji: FEATHER_EMOJI, chance: t.feathers, color: CONFIG.COLORS.FEATHERS,
+      kind: 'currency', amountMin: t.featherMin, amountMax: t.featherMax,
+    },
+    {
+      key: 'NOTHING', label: 'Nothing', emoji: '💨', chance: t.nothing, color: CONFIG.COLORS.NOTHING, kind: 'none',
+    },
+  ];
+}
+
 const CHEST_TYPES = {
   CENIZA: {
     key: 'CENIZA',
@@ -152,7 +200,7 @@ const CHEST_TYPES = {
     tierLabel: 'Común',
     emoji: '🩶',
     color: CONFIG.COLORS.CENIZA,
-    weight: 70,
+    weight: 69.2,
     flavor: 'Lo más habitual. La mayoría de las veces no guarda nada — pero "la mayoría" no es "siempre".',
     rewardTable: buildRewardTable({ arise: 0.15, king: 0.35, goat: 0.48, aura: 0.6, starX: 1.2, feathers: 6, featherMin: 8, featherMax: 15, nothing: 91.22 }),
   },
@@ -162,7 +210,7 @@ const CHEST_TYPES = {
     tierLabel: 'Raro',
     emoji: '🔥',
     color: CONFIG.COLORS.BRASA,
-    weight: 25,
+    weight: 25.5,
     flavor: 'Arde distinto. Las probabilidades de premio se cuadruplican frente a un cofre común.',
     rewardTable: buildRewardTable({ arise: 0.4, king: 0.9, goat: 1.2, aura: 1.6, starX: 3.2, feathers: 12, featherMin: 15, featherMax: 30, nothing: 80.7 }),
   },
@@ -175,6 +223,16 @@ const CHEST_TYPES = {
     weight: 5,
     flavor: 'Casi nunca aparece. Sigue sin ser fácil — pero es lo más cerca que vas a estar de un rol legendario.',
     rewardTable: buildRewardTable({ arise: 1.2, king: 2.5, goat: 3.3, aura: 4.3, starX: 8.6, feathers: 25, featherMin: 30, featherMax: 60, nothing: 55.1 }),
+  },
+  OG: {
+    key: 'OG',
+    name: 'Cofre OG',
+    tierLabel: 'Mítico',
+    emoji: '🕶️',
+    color: CONFIG.COLORS.OG_CHEST,
+    weight: 0.3,
+    flavor: 'No debería existir. Casi nadie lo ve aparecer en toda la vida del servidor — y ni así es fácil sacar algo de él.',
+    rewardTable: buildOgRewardTable({ og: 0.3, threeK: 0.6, nineK: 1.0, feathers: 42, featherMin: 80, featherMax: 150, nothing: 56.1 }),
   },
 };
 
@@ -392,35 +450,35 @@ const SHOP_ITEMS = {
     key: 'SHIELD',
     name: 'Escudo de Xerion',
     emoji: '🛡️',
-    cost: 140,
+    cost: 220,
     description: 'Objeto raro: te protege automáticamente si te toca caer en la **primera ronda** de tu próxima batalla. Se consume al usarse.',
   },
   CHARM: {
     key: 'CHARM',
     name: 'Amuleto de Suerte',
     emoji: '🍀',
-    cost: 220,
+    cost: 350,
     description: 'Objeto legendario: la próxima vez que abras un cofre, tus probabilidades de conseguir un **rol** suben un 50%. Se consume al usarse.',
   },
   REVIVE: {
     key: 'REVIVE',
     name: 'Pluma Fénix',
     emoji: '🪶',
-    cost: 400,
+    cost: 650,
     description: 'Objeto mítico: si te eliminan en una batalla, revives una única vez y sigues en juego hasta la siguiente ronda. Se consume al usarse, funcione o no.',
   },
   WARD: {
     key: 'WARD',
     name: 'Amuleto contra el Vacío',
     emoji: '🔮',
-    cost: 450,
+    cost: 750,
     description: 'Objeto mítico: garantiza que tu próximo cofre **no** te dé "Nothing" — vas a sacar algo sí o sí (rol o Feathers). Se consume al usarse.',
   },
   TIME_SKIP: {
     key: 'TIME_SKIP',
     name: 'Acelerador Temporal',
     emoji: '⏩',
-    cost: 320,
+    cost: 500,
     description: 'Objeto raro: la próxima vez que uses `/claim`, completa al instante TODO el ingreso pasivo de rol que tengas pendiente, sin esperar el tiempo restante. Se consume al usarse.',
   },
 };
@@ -433,6 +491,43 @@ const SHOP_ITEMS = {
 const SHOP_MAX_ITEMS = 5;
 if (Object.keys(SHOP_ITEMS).length > SHOP_MAX_ITEMS) {
   throw new Error(`[Xerion] La tienda tiene ${Object.keys(SHOP_ITEMS).length} objetos — el máximo permitido es ${SHOP_MAX_ITEMS}.`);
+}
+
+// ============================================================================
+// RNG — minijuego estilo "Roblox RNG": tirar (`/roll`), vender lo que salga
+// por Fragmentos (`/sell`) y canjear Fragmentos por Feathers (`/redeem`).
+// A propósito solo 3 comandos (el techo que se pidió). Extremadamente
+// difícil a propósito: el tramo top ("Secreto") es 1 en 10.000 tiradas.
+// Balance: el valor esperado en Fragmentos de una tirada, convertido a
+// Feathers, es MENOR al costo de tirar — como cualquier gacha real, es un
+// sumidero de Feathers, no una máquina de imprimir. Ver RNG_ROLL_COST y
+// RNG_FRAGMENT_TO_FEATHERS más abajo.
+// ============================================================================
+
+const RNG_ROLL_COST = 15; // Feathers por tirada
+const RNG_FRAGMENT_TO_FEATHERS = 0.5; // cuánto vale 1 Fragmento al canjear
+
+const RNG_ITEMS = {
+  COMUN: { key: 'COMUN', name: 'Chatarra Encantada', tier: 'Común', emoji: '⚙️', color: CONFIG.COLORS.RNG_COMUN, weight: 55, fragments: 2 },
+  POCO_COMUN: { key: 'POCO_COMUN', name: 'Reliquia Menor', tier: 'Poco Común', emoji: '🔧', color: CONFIG.COLORS.RNG_POCO_COMUN, weight: 26, fragments: 6 },
+  RARO: { key: 'RARO', name: 'Reliquia Rara', tier: 'Raro', emoji: '🔷', color: CONFIG.COLORS.RNG_RARO, weight: 12.5, fragments: 18 },
+  EPICO: { key: 'EPICO', name: 'Artefacto Épico', tier: 'Épico', emoji: '🟣', color: CONFIG.COLORS.RNG_EPICO, weight: 5, fragments: 60 },
+  LEGENDARIO: { key: 'LEGENDARIO', name: 'Artefacto Legendario', tier: 'Legendario', emoji: '🟠', color: CONFIG.COLORS.RNG_LEGENDARIO, weight: 1.3, fragments: 250 },
+  MITICO: { key: 'MITICO', name: 'Núcleo Mítico', tier: 'Mítico', emoji: '🔴', color: CONFIG.COLORS.RNG_MITICO, weight: 0.19, fragments: 1200 },
+  SECRETO: { key: 'SECRETO', name: 'Fragmento Divino', tier: 'Secreto', emoji: '✨', color: CONFIG.COLORS.RNG_SECRETO, weight: 0.01, fragments: 8000 },
+};
+
+const RNG_ITEM_LIST = Object.values(RNG_ITEMS);
+
+/** Elige un objeto de RNG al azar según su peso — misma filosofía que pickChestType/pickPortalType/pickEventType. */
+function pickRngItem() {
+  const totalWeight = RNG_ITEM_LIST.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const item of RNG_ITEM_LIST) {
+    roll -= item.weight;
+    if (roll <= 0) return item;
+  }
+  return RNG_ITEM_LIST[0];
 }
 
 // ============================================================================
@@ -593,14 +688,17 @@ function isOnCooldown(key, ms) {
 // ============================================================================
 
 const ROLE_FEATHER_BONUS = {
+  OG: 0.35,
+  THREE_K: 0.28,
   ARISE: 0.25,
+  NINE_K: 0.2,
   KING: 0.18,
   GOAT: 0.12,
   AURA_INFINITE: 0.06,
   STAR_X: 0.02,
 };
 
-const ROLE_RARITY_ORDER = ['ARISE', 'KING', 'GOAT', 'AURA_INFINITE', 'STAR_X']; // de más raro a más común
+const ROLE_RARITY_ORDER = ['OG', 'THREE_K', 'ARISE', 'NINE_K', 'KING', 'GOAT', 'AURA_INFINITE', 'STAR_X']; // de más raro a más común
 
 /** Recibe la lista de roles que el usuario tiene AHORA (ej. ['KING','STAR_X']) y devuelve su multiplicador de Feathers. */
 function featherBonusMultiplier(heldRoleKeys = []) {
@@ -641,14 +739,23 @@ const ACHIEVEMENTS = [
     key: 'collector',
     name: 'Coleccionista',
     description: 'Ten los 5 roles de cofre a la vez.',
-    check: (s, held = []) => ROLE_RARITY_ORDER.every((k) => held.includes(k)),
+    check: (s, held = []) => ['ARISE', 'KING', 'GOAT', 'AURA_INFINITE', 'STAR_X'].every((k) => held.includes(k)),
+  },
+  { key: 'nine_k_holder', name: '9K de verdad', description: 'Ten el rol 9K (exclusivo del Cofre OG).', check: (s, held = []) => held.includes('NINE_K') },
+  { key: 'three_k_holder', name: '3K legítimo', description: 'Ten el rol 3K (exclusivo del Cofre OG).', check: (s, held = []) => held.includes('THREE_K') },
+  { key: 'og_holder', name: 'Original', description: 'Ten el rol OG (exclusivo del Cofre OG).', check: (s, held = []) => held.includes('OG') },
+  {
+    key: 'og_collector',
+    name: 'La Triple Corona',
+    description: 'Ten los 3 roles del Cofre OG (9K, 3K y OG) a la vez.',
+    check: (s, held = []) => ['NINE_K', 'THREE_K', 'OG'].every((k) => held.includes(k)),
   },
   { key: 'streak_week', name: 'Constancia de hierro', description: 'Llega a una racha de 7 días en /daily.', check: (s) => (s.best_streak || 0) >= 7 },
   { key: 'streak_month', name: 'Disciplina absoluta', description: 'Llega a una racha de 30 días en /daily.', check: (s) => (s.best_streak || 0) >= 30 },
 ];
 
 const ACHIEVEMENT_BONUS_PER_UNLOCK = 0.005; // +0.5% Feathers por logro desbloqueado
-const ACHIEVEMENT_BONUS_CAP = 0.05; // tope de +5% (10 logros de 14)
+const ACHIEVEMENT_BONUS_CAP = 0.05; // tope de +5% (10 logros de 18)
 
 function countCompletedAchievements(stats = {}, heldRoleKeys = []) {
   return ACHIEVEMENTS.reduce((n, a) => n + (a.check(stats, heldRoleKeys) ? 1 : 0), 0);
@@ -677,7 +784,10 @@ const ROLE_PASSIVE_INCOME = {
   AURA_INFINITE: { intervalMs: 10 * 60 * 60 * 1000, amount: 15 },
   GOAT: { intervalMs: 20 * 60 * 60 * 1000, amount: 40 },
   KING: { intervalMs: 48 * 60 * 60 * 1000, amount: 100 },
+  NINE_K: { intervalMs: 60 * 60 * 60 * 1000, amount: 130 },
   ARISE: { intervalMs: 72 * 60 * 60 * 1000, amount: 160 },
+  THREE_K: { intervalMs: 90 * 60 * 60 * 1000, amount: 220 },
+  OG: { intervalMs: 120 * 60 * 60 * 1000, amount: 320 },
 };
 const SAFE_MENTIONS = { parse: [] };
 function pingOnly(userIds) {
@@ -738,6 +848,11 @@ module.exports = {
   pickEventType,
   SHOP_ITEMS,
   SHOP_MAX_ITEMS,
+  RNG_ITEMS,
+  RNG_ITEM_LIST,
+  pickRngItem,
+  RNG_ROLL_COST,
+  RNG_FRAGMENT_TO_FEATHERS,
   computeSpawnChance,
   messagesUntilNextIncrease,
   rollReward,
