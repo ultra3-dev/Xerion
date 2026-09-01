@@ -101,6 +101,21 @@ const RNG_ITEM_COLUMNS = {
   SECRETO: 'rng_secreto',
 };
 
+/**
+ * Filtra heldRoleKeys (roles que el usuario tiene AHORA en Discord) a solo
+ * los que además GANÓ con el bot al menos una vez (su columna de conteo en
+ * xerion_users es > 0). Tener el rol puesto a mano por un admin, o
+ * agregado uno mismo, ya NO alcanza para los beneficios — hay que haberlo
+ * sacado de un cofre. `userRow` es la fila de xerion_users ya obtenida por
+ * quien llama (nunca se pide una consulta aparte solo para esto).
+ */
+function filterEarnedRoles(heldRoleKeys, userRow = {}) {
+  return heldRoleKeys.filter((key) => {
+    const countColumn = ROLE_INCOME_COLUMNS[key]?.count;
+    return countColumn && (userRow[countColumn] || 0) > 0;
+  });
+}
+
 const XERION_STATE_COLUMNS = [
   ['message_counter', 'INTEGER NOT NULL DEFAULT 0'],
   ['messages_since_chest', 'INTEGER NOT NULL DEFAULT 0'],
@@ -343,7 +358,8 @@ async function settleChestReward(chestId, userId, reward, channelId = null, held
     // guardar el historial para que quede el monto real acreditado.
     if (reward.kind === 'currency') {
       const { rows: bonusRows } = await client.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
-      const multiplier = totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {});
+      const earnedRoleKeys = filterEarnedRoles(heldRoleKeys, bonusRows[0] || {});
+      const multiplier = totalFeatherMultiplier(earnedRoleKeys, bonusRows[0] || {});
       reward.amount = Math.round((reward.amount || 0) * multiplier); // el llamador reutiliza este objeto para el embed de resultado
     }
 
@@ -825,7 +841,8 @@ async function consumeLuckCharmIfAvailable(userId) {
 async function claimDaily(userId, identity = {}, heldRoleKeys = [], eventMultiplier = 1) {
   await ensureUser(userId, identity);
   const { rows: bonusRows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
-  const dailyReward = Math.round(25 * totalFeatherMultiplier(heldRoleKeys, bonusRows[0] || {}) * eventMultiplier);
+  const earnedRoleKeys = filterEarnedRoles(heldRoleKeys, bonusRows[0] || {});
+  const dailyReward = Math.round(25 * totalFeatherMultiplier(earnedRoleKeys, bonusRows[0] || {}) * eventMultiplier);
   const { rows } = await pool.query(
     `UPDATE xerion_users
      SET feathers = feathers + $2,
@@ -874,6 +891,7 @@ async function collectRoleIncome(userId, heldRoleKeys = [], eventMultiplier = 1)
   await ensureUser(userId);
   const { rows } = await pool.query(`SELECT * FROM xerion_users WHERE user_id = $1;`, [userId]);
   const row = rows[0];
+  const earnedRoleKeys = filterEarnedRoles(heldRoleKeys, row);
   const now = Date.now();
 
   const claimed = [];
@@ -883,7 +901,7 @@ async function collectRoleIncome(userId, heldRoleKeys = [], eventMultiplier = 1)
   let totalAmount = 0;
 
   for (const [key, cols] of Object.entries(ROLE_INCOME_COLUMNS)) {
-    if (!heldRoleKeys.includes(key)) continue; // ya no tiene el rol AHORA — sin ingreso, tenga o no historial
+    if (!earnedRoleKeys.includes(key)) continue; // no tiene el rol ahora, o lo tiene pero nunca lo ganó con el bot — sin ingreso
     const { intervalMs, amount: baseAmount } = ROLE_PASSIVE_INCOME[key];
     const amount = Math.round(baseAmount * eventMultiplier);
     const lastAt = row[cols.at] ? new Date(row[cols.at]).getTime() : null;
@@ -923,7 +941,8 @@ async function collectRoleIncome(userId, heldRoleKeys = [], eventMultiplier = 1)
     );
   }
 
-  return { claimed, pending, totalAmount, hasAnyRole: heldRoleKeys.length > 0, usedTimeSkip };
+  const unearnedRoleKeys = heldRoleKeys.filter((key) => ROLE_INCOME_COLUMNS[key] && !earnedRoleKeys.includes(key));
+  return { claimed, pending, totalAmount, hasAnyRole: earnedRoleKeys.length > 0, unearnedRoleKeys, usedTimeSkip };
 }
 
 /**
@@ -1002,6 +1021,7 @@ module.exports = {
   resetUserData,
   getRecentAwards,
   ROLE_INCOME_COLUMNS,
+  filterEarnedRoles,
   RNG_ITEM_COLUMNS,
   rollRng,
   sellRngItems,

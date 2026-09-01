@@ -1077,8 +1077,9 @@ async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
   };
   activePortals.set(channel.id, state);
 
+  let message;
   try {
-    const message = await channel.send({
+    message = await channel.send({
       components: [visuals.buildPortalEmbed({ portalType, participants: [], pot: 0, endsAt, activeEvent: getCurrentEvent() })],
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: SAFE_MENTIONS,
@@ -1096,7 +1097,36 @@ async function spawnPortal(channel, forcedTypeKey = null, isForced = false) {
   }, PORTAL_JOIN_WINDOW_MS);
 
   console.log(`[Xerion] ${portalType.name} abierto en #${channel.id}${isForced ? ' (forzado por el owner)' : ''}.`);
+
+  notifyPortalSpawn(channel.client, portalType, message).catch((err) => console.error('[Xerion] Error enviando notificaciones de portal:', err));
+
   return true;
+}
+
+/** Avisa por DM a todos los usuarios que activaron /notification cuando se abre un portal — mismo mecanismo que los cofres. */
+async function notifyPortalSpawn(client, portalType, portalMessage) {
+  let userIds;
+  try {
+    userIds = await db.getEnabledNotificationUserIds();
+  } catch (err) {
+    console.error('[Xerion] Error leyendo la lista de notificaciones (portal):', err);
+    return;
+  }
+  if (userIds.length === 0) return;
+
+  const container = visuals.buildPortalAlertContainer(portalType, portalMessage.url);
+  const payload = { components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS };
+
+  const results = await Promise.allSettled(
+    userIds.map(async (userId) => {
+      const user = await client.users.fetch(userId);
+      await user.send(payload);
+    }),
+  );
+  const failed = results.filter((r) => r.status === 'rejected').length;
+  if (failed > 0) {
+    console.log(`[Xerion] ${failed}/${userIds.length} notificaciones de portal no se pudieron entregar (DMs cerrados, probablemente).`);
+  }
 }
 
 function schedulePortalCountUpdate(state, message) {
@@ -1440,7 +1470,7 @@ const slashCommandDefinitions = [
   new SlashCommandBuilder().setName('portals').setDescription('See the odds and payout split for all 3 portal ranks.'),
   new SlashCommandBuilder().setName('event').setDescription('See the active global event, if any.'),
   new SlashCommandBuilder().setName('shop').setDescription('Spend your Feathers on Shields and Luck Charms.'),
-  new SlashCommandBuilder().setName('notification').setDescription('Toggle DM alerts for when a chest appears.'),
+  new SlashCommandBuilder().setName('notification').setDescription('Toggle DM alerts for when a chest or portal appears.'),
   new SlashCommandBuilder().setName('stats').setDescription('Server-wide Xerion stats.'),
   new SlashCommandBuilder().setName('help').setDescription('List all Xerion commands.'),
   new SlashCommandBuilder().setName('chest').setDescription('See the live chest status and channel chance.'),
@@ -1549,14 +1579,14 @@ async function restoreActiveChest(client) {
 
 async function cmdCooldowns(interaction) {
   const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-  const heldRoleKeys = getHeldRoleKeys(interaction.member);
+  const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(interaction.member), stats);
   const now = Date.now();
 
   const lastDaily = stats.last_daily_claim_at ? new Date(stats.last_daily_claim_at).getTime() : null;
   const dailyReadyAt = lastDaily === null ? now : lastDaily + 24 * 60 * 60 * 1000;
   const dailyInfo = { ready: dailyReadyAt <= now, readyAt: new Date(dailyReadyAt) };
 
-  const roleIncomeList = heldRoleKeys
+  const roleIncomeList = earnedRoleKeys
     .filter((key) => ROLE_PASSIVE_INCOME[key])
     .map((key) => {
       const cols = db.ROLE_INCOME_COLUMNS[key];
@@ -1575,7 +1605,8 @@ async function cmdProfile(interaction) {
   try {
     const stats = await db.getUserStats(target.id, { username: target.username, displayName: target.displayName });
     const targetMember = target.id === interaction.user.id ? interaction.member : await interaction.guild.members.fetch(target.id).catch(() => null);
-    await interaction.editReply({ components: [visuals.buildProfileContainer(stats, target, getHeldRoleKeys(targetMember))], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
+    const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(targetMember), stats);
+    await interaction.editReply({ components: [visuals.buildProfileContainer(stats, target, earnedRoleKeys)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /profile:', err);
     await interaction.editReply('Could not load that profile right now — try again in a moment.');
@@ -1846,7 +1877,8 @@ async function cmdHistory(interaction) {
 
 async function cmdAchievements(interaction) {
   const stats = await db.getUserStats(interaction.user.id, identityFor(interaction.user));
-  return sendV2(interaction, visuals.buildAchievementsContainer(stats, getHeldRoleKeys(interaction.member)));
+  const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(interaction.member), stats);
+  return sendV2(interaction, visuals.buildAchievementsContainer(stats, earnedRoleKeys));
 }
 
 async function cmdPortals(interaction) {
@@ -1904,14 +1936,14 @@ function noPingReply(message, payload) {
 
 async function prefixCooldowns(message) {
   const stats = await db.getUserStats(message.author.id, identityFor(message.author));
-  const heldRoleKeys = getHeldRoleKeys(message.member);
+  const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(message.member), stats);
   const now = Date.now();
 
   const lastDaily = stats.last_daily_claim_at ? new Date(stats.last_daily_claim_at).getTime() : null;
   const dailyReadyAt = lastDaily === null ? now : lastDaily + 24 * 60 * 60 * 1000;
   const dailyInfo = { ready: dailyReadyAt <= now, readyAt: new Date(dailyReadyAt) };
 
-  const roleIncomeList = heldRoleKeys
+  const roleIncomeList = earnedRoleKeys
     .filter((key) => ROLE_PASSIVE_INCOME[key])
     .map((key) => {
       const cols = db.ROLE_INCOME_COLUMNS[key];
@@ -1928,7 +1960,8 @@ async function prefixProfile(message) {
   const target = message.mentions.users.first() || message.author;
   const stats = await db.getUserStats(target.id);
   const targetMember = target.id === message.author.id ? message.member : await message.guild.members.fetch(target.id).catch(() => null);
-  return noPingReply(message, { components: [visuals.buildProfileContainer(stats, target, getHeldRoleKeys(targetMember))], flags: MessageFlags.IsComponentsV2 });
+  const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(targetMember), stats);
+  return noPingReply(message, { components: [visuals.buildProfileContainer(stats, target, earnedRoleKeys)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixInventory(message) {
@@ -2053,7 +2086,8 @@ async function prefixHistory(message) {
 
 async function prefixAchievements(message) {
   const stats = await db.getUserStats(message.author.id, identityFor(message.author));
-  return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats, getHeldRoleKeys(message.member))], flags: MessageFlags.IsComponentsV2 });
+  const earnedRoleKeys = db.filterEarnedRoles(getHeldRoleKeys(message.member), stats);
+  return noPingReply(message, { components: [visuals.buildAchievementsContainer(stats, earnedRoleKeys)], flags: MessageFlags.IsComponentsV2 });
 }
 
 async function prefixPortals(message) {

@@ -26,14 +26,18 @@ const game = require('./game.js');
 // ============================================================================
 
 const TIER_CARDS_HTML = CHEST_TYPE_LIST.map((t) => {
-  const arise = t.rewardTable.find((r) => r.key === 'ARISE');
+  // Genérico a propósito — mismo fix que ya se hizo en visuals.js: la
+  // "mejor recompensa" es el rol con menos % en ESTA tabla, no una key
+  // fija. El Cofre OG no tiene ningún rol llamado ARISE, así que buscarlo
+  // a mano acá rompía el arranque del bot entero apenas cargaba index.js.
+  const bestRole = t.rewardTable.filter((r) => r.kind === 'role').reduce((best, r) => (!best || r.chance < best.chance ? r : best), null);
   const feathers = t.rewardTable.find((r) => r.key === 'FEATHERS');
   const hex = `#${t.color.toString(16).padStart(6, '0')}`;
   return `
         <div class="reward-card" style="--accent:${hex}">
           <span class="reward-emoji">${t.emoji}</span>
           <span class="reward-name">${t.name}</span>
-          <span class="reward-pct">${arise.chance}%</span>
+          <span class="reward-pct">${bestRole.chance}%</span>
           <span class="reward-sub">${t.tierLabel} · +${feathers.amountMin}–${feathers.amountMax} Feathers</span>
         </div>`;
 }).join('\n');
@@ -221,7 +225,7 @@ const WEBSITE_HTML = `<!DOCTYPE html>
         <tr><td><code>/portals</code></td><td>Odds and payout split for all 3 portal ranks</td></tr>
         <tr><td><code>/event</code></td><td>See the active global event, if any</td></tr>
         <tr><td><code>/shop</code></td><td>Spend Feathers on Shields, Luck Charms and Phoenix Feathers (max 5 items)</td></tr>
-        <tr><td><code>/notification</code></td><td>Toggle a DM alert for when a chest appears</td></tr>
+        <tr><td><code>/notification</code></td><td>Toggle a DM alert for when a chest or portal appears</td></tr>
         <tr><td><code>/stats</code></td><td>Server-wide Xerion stats</td></tr>
         <tr><td><code>/help</code></td><td>List every command</td></tr>
         <tr><td><code>/chest</code></td><td>Live status, channel counters and current chance</td></tr>

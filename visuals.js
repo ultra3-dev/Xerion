@@ -1807,8 +1807,8 @@ function buildNotificationContainer(enabled, ownerId = '') {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         [
-          '# Notificaciones de Cofre',
-          '-# Recibe un DM en cuanto aparezca un cofre en el servidor',
+          '# Notificaciones de Cofre y Portal',
+          '-# Recibe un DM en cuanto aparezca un cofre o un portal en el servidor',
           '',
           enabled ? '🔔 **Estado actual: Activadas**' : '🔕 **Estado actual: Desactivadas**',
         ].join('\n'),
@@ -1880,6 +1880,28 @@ function buildChestAlertContainer(chestType, jumpUrl) {
     );
 }
 
+/** DM cuando aparece un portal — mismo mecanismo y mismo toggle de /notification que los cofres. */
+function buildPortalAlertContainer(portalType, jumpUrl) {
+  return new ContainerBuilder()
+    .setAccentColor(portalType.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        [
+          `# ${portalType.emoji} ¡Se abrió un ${portalType.name}!`,
+          `-# Rango: ${portalType.rankLabel} · Xerion v${CONFIG.VERSION}`,
+          '',
+          'Tienes **10 minutos** para apostar y entrar antes de que se cierre.',
+          '',
+          jumpUrl,
+        ].join('\n'),
+      ),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Desactiva estos avisos cuando quieras con `/notification`'),
+    );
+}
+
 function buildHelpContainer() {
   const container = new ContainerBuilder()
     .setAccentColor(CONFIG.COLORS.BRAND)
@@ -1900,7 +1922,7 @@ function buildHelpContainer() {
           '`/sell` [`xn sell`] — vende todo tu inventario de RNG por Fragmentos',
           '`/redeem` [`xn redeem`] — canjea tus Fragmentos por Feathers',
           '`/shop` [`xn shop`] — gasta tus Feathers en objetos (máximo 5, siempre)',
-          '`/notification` [`xn notif`] — activa o desactiva los DM de cofre',
+          '`/notification` [`xn notif`] — activa o desactiva los DM de cofre y portal',
           '`/stats` [`xn stats`] — estadísticas del servidor',
            '`/help` [`xn help`] — este menú',
            '`/chest` [`xn chest`] — estado del cofre y probabilidad actual',
@@ -2117,16 +2139,18 @@ function buildChestStatusContainer(channelId, state, active, stepMessages = CONF
 /** Panel de resultado para /claim (el ingreso pasivo por rol, no cofres — eso ya lo resuelve el auto re-sorteo). */
 function buildRoleIncomeContainer(result) {
   if (!result.hasAnyRole) {
-    return buildSimpleContainer(
-      'Ingreso de Roles',
-      'Todavía no tienes ningún rol',
-      [
-        '🎁 Cada rol que ganes en un cofre te da Feathers cada cierto tiempo, solo por tenerlo.',
-        'Entre más raro el rol, más Feathers da y más tiempo hay que esperar entre cobro y cobro.',
-        'Gana tu primer rol en un cofre y vuelve a usar `/claim` cuando esté listo.',
-      ],
-      CONFIG.COLORS.FEATHERS,
-    );
+    const lines = [
+      '🎁 Cada rol que ganes en un cofre te da Feathers cada cierto tiempo, solo por tenerlo.',
+      'Entre más raro el rol, más Feathers da y más tiempo hay que esperar entre cobro y cobro.',
+      'Gana tu primer rol en un cofre y vuelve a usar `/claim` cuando esté listo.',
+    ];
+    if (result.unearnedRoleKeys?.length > 0) {
+      lines.push(
+        '',
+        `⚠️ Tenés puesto ${result.unearnedRoleKeys.map((k) => ROLE_LABELS[k]).join(', ')}, pero no da ingreso — solo cuenta si lo ganaste en un cofre de Xerion. Conseguílo ahí para activarlo.`,
+      );
+    }
+    return buildSimpleContainer('Ingreso de Roles', 'Todavía no tienes ningún rol que dé ingreso', lines, CONFIG.COLORS.FEATHERS);
   }
 
   const lines = [];
@@ -2147,6 +2171,10 @@ function buildRoleIncomeContainer(result) {
     for (const p of result.pending) {
       lines.push(`${ROLE_LABELS[p.key]} — listo <t:${toUnixSeconds(p.readyAt)}:R>`);
     }
+  }
+
+  if (result.unearnedRoleKeys?.length > 0) {
+    lines.push('', `⚠️ ${result.unearnedRoleKeys.map((k) => ROLE_LABELS[k]).join(', ')} no da ingreso — hay que ganarlo en un cofre de Xerion, no alcanza con tenerlo puesto.`);
   }
 
   return buildSimpleContainer('Ingreso de Roles', 'Recolecta el ingreso pasivo de tus roles', lines, CONFIG.COLORS.FEATHERS);
@@ -2276,6 +2304,7 @@ module.exports = {
   buildShopContainer,
   buildNotificationContainer,
   buildChestAlertContainer,
+  buildPortalAlertContainer,
   buildStatsContainer,
   buildHelpContainer,
   buildSimpleContainer,

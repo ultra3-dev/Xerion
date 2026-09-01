@@ -1,8 +1,24 @@
 # Xerion v2.0.5 ULTRA — Qué cambió
 
-## ⚔️ Portales: eliminación por rondas de verdad, no un flash de 1.8s
+## 🔴 Arreglo urgente: el bot no arrancaba
 
-Tenías razón en que se veían aburridos. El resultado (ganador y reparto) sigue saliendo SIEMPRE de `computePortalPayouts` antes de animar nada — eso no cambió, sigue siendo matemáticamente limpio — pero ahora cómo se cuenta esa historia es completamente distinto:
+La página de estado (`index.js`) armaba las tarjetas de cofres buscando el rol "ARISE" a mano para mostrar el porcentaje — el Cofre OG no tiene ningún rol con esa key, así que apenas cargaba `index.js` (antes incluso de conectar con Discord) el bot explotaba con `Cannot read properties of undefined (reading 'chance')`. Es el mismo tipo de bug que ya había arreglado en `visuals.js`, pero en otro archivo que no había revisado con el mismo detalle. Arreglado igual que el otro: busca la recompensa con menos % en la tabla de cada cofre, sin asumir ningún rol fijo. Agregué `require('./index.js')` a mi batería de pruebas para que esto no se me vuelva a pasar — antes solo probaba los módulos que `index.js` usa, no `index.js` en sí.
+
+## 🔒 Los roles ahora solo dan beneficio si los ganaste en un cofre
+
+Tenías razón en que mucha gente ya tenía los roles puestos de antes. Ahora, tener el rol en Discord ya NO alcanza — además tiene que constar que lo ganaste en un cofre de Xerion al menos una vez (el conteo que ya se guardaba por cada rol). Si un admin te lo pone a mano, o te lo agregás vos, no vas a recibir el ingreso pasivo, el bonus de Feathers, ni se te va a contar para logros — hasta que lo saques de un cofre de verdad. Esto se aplicó a los 8 roles por igual (los 5 originales y los 3 del Cofre OG), y a todos los lugares donde importa: `/claim`, `/daily`, `/profile`, `/cooldowns`, `/achievements`, y el bonus de Feathers al abrir un cofre. `/claim` y `/profile` ahora te avisan explícitamente si tenés un rol puesto que no te está dando nada, y por qué.
+
+## 📬 Notificaciones por DM también para portales
+
+`/notification` ahora te avisa por DM tanto cuando aparece un cofre como cuando se abre un portal — mismo toggle, no hace falta activar nada aparte.
+
+## 🎰 RNG: confirmado el ritmo que pediste
+
+El canje ya estaba exactamente en la proporción que diste de ejemplo: 1000 Fragmentos = 500 Feathers (0.5 por Fragmento). No hizo falta tocar nada ahí — sigue siendo difícil de acumular porque los objetos comunes solo dan 2–6 Fragmentos cada uno.
+
+---
+
+
 
 - El Boss ahora elimina en **rondas reales** (hasta 4), cada una con su propio mensaje tipo "El Boss ataca a **@fulano** — ¡eliminado!", con pausa entre ronda y ronda — mismo ritmo dramático que ya tenía la eliminación de los cofres, pero con canvas en vez de solo texto.
 - El canvas del portal ahora tiene **iconos de verdad**: una cara de Boss sobre la silueta central, un ícono de KO sobre cada participante eliminado, y una corona sobre el ganador en el frame final — nada de esto estaba antes, era solo círculos y colores.
