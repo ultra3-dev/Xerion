@@ -1671,32 +1671,15 @@ async function cmdRoll(interaction) {
       return interaction.editReply({ components: [visuals.buildRollNotEnoughContainer(stats.feathers || 0)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
     }
 
-    try {
-      const iconMap = await visuals.preloadRngIcons().catch(() => null);
-      const flickerKeys = RNG_ITEM_LIST.map((i) => i.key);
-      for (const delay of RNG_SPIN_DELAYS_MS) {
-        const flickerKey = flickerKeys[randomInt(flickerKeys.length)];
-        await interaction
-          .editReply({
-            components: [visuals.buildRollSpinContainer()],
-            flags: MessageFlags.IsComponentsV2,
-            files: [visuals.rngCardFrameAttachment(flickerKey, iconMap)],
-            attachments: [],
-          })
-          .catch(() => {});
-        await sleep(delay);
-      }
-      await interaction.editReply({
-        components: [visuals.buildRollResultContainer(item, result.feathers)],
-        flags: MessageFlags.IsComponentsV2,
-        files: [visuals.rngCardFrameAttachment(item.key, iconMap)],
-        attachments: [],
-        allowedMentions: SAFE_MENTIONS,
-      });
-    } catch (err) {
-      console.error('[Xerion] El canvas de /roll falló, se degrada a solo el resultado:', err);
-      await interaction.editReply({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2, files: [], allowedMentions: SAFE_MENTIONS });
+    // Sin Canvas — solo texto y color cambiando de frame a frame, así no
+    // genera ni sube ninguna imagen (mucho más liviano que la versión
+    // anterior, no debería notarse lag ni consumir de más el hosting).
+    for (const delay of RNG_SPIN_DELAYS_MS) {
+      const flickerItem = RNG_ITEM_LIST[randomInt(RNG_ITEM_LIST.length)];
+      await interaction.editReply({ components: [visuals.buildRollSpinContainer(flickerItem)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+      await sleep(delay);
     }
+    await interaction.editReply({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2, allowedMentions: SAFE_MENTIONS });
   } catch (err) {
     console.error('[Xerion] Error en /roll:', err);
     await interaction.editReply('Something went wrong rolling — try again in a moment.');
@@ -1997,28 +1980,14 @@ async function prefixRoll(message) {
     return noPingReply(message, { components: [visuals.buildRollNotEnoughContainer(stats.feathers || 0)], flags: MessageFlags.IsComponentsV2 });
   }
 
-  try {
-    const iconMap = await visuals.preloadRngIcons().catch(() => null);
-    const flickerKeys = RNG_ITEM_LIST.map((i) => i.key);
-    const spinMsg = await noPingReply(message, {
-      components: [visuals.buildRollSpinContainer()],
-      flags: MessageFlags.IsComponentsV2,
-      files: [visuals.rngCardFrameAttachment(flickerKeys[randomInt(flickerKeys.length)], iconMap)],
-    });
-    for (const delay of RNG_SPIN_DELAYS_MS) {
-      await sleep(delay);
-      const flickerKey = flickerKeys[randomInt(flickerKeys.length)];
-      await spinMsg
-        .edit({ components: [visuals.buildRollSpinContainer()], flags: MessageFlags.IsComponentsV2, files: [visuals.rngCardFrameAttachment(flickerKey, iconMap)], attachments: [] })
-        .catch(() => {});
-    }
-    await spinMsg
-      .edit({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2, files: [visuals.rngCardFrameAttachment(item.key, iconMap)], attachments: [] })
-      .catch(() => {});
-  } catch (err) {
-    console.error('[Xerion] El canvas de xn roll falló, se degrada a solo el resultado:', err);
-    return noPingReply(message, { components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2 });
+  const firstFlicker = RNG_ITEM_LIST[randomInt(RNG_ITEM_LIST.length)];
+  const spinMsg = await noPingReply(message, { components: [visuals.buildRollSpinContainer(firstFlicker)], flags: MessageFlags.IsComponentsV2 });
+  for (const delay of RNG_SPIN_DELAYS_MS) {
+    await sleep(delay);
+    const flickerItem = RNG_ITEM_LIST[randomInt(RNG_ITEM_LIST.length)];
+    await spinMsg.edit({ components: [visuals.buildRollSpinContainer(flickerItem)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
   }
+  await spinMsg.edit({ components: [visuals.buildRollResultContainer(item, result.feathers)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
 }
 
 async function prefixSell(message) {

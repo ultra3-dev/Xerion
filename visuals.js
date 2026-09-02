@@ -803,10 +803,10 @@ function portalSpinFrameAttachment(users, avatarMap, portalType, opts = {}, name
 const WHEEL_SIZE = 480;
 const WHEEL_ICON_CODEPOINTS = {
   DOUBLE_LUCK: '1f340',
-  FEATHER_RAIN: '1f985',
+  FEATHER_RAIN: '1f426-200d-1f525',
   WEAK_VOID: '1f4a8',
   UNSTABLE_PORTALS: '1f300',
-  ABUNDANT_CHESTS: '1f5c2',
+  ABUNDANT_CHESTS: '1fa76',
   ABYSS_OMEN: '1f311',
   BLESSED_STREAK: '1f525',
   ROYAL_INCOME: '1f451',
@@ -822,7 +822,7 @@ async function preloadEventIcons() {
   return new Map(entries);
 }
 
-function drawWheelWedge(ctx, cx, cy, radius, startAngle, endAngle, color, iconImg, dim) {
+function drawWheelWedge(ctx, cx, cy, radius, startAngle, endAngle, color, iconImg, dim, counterRotation = 0) {
   const { r, g, b } = hexToRgb(color);
   const mid = (startAngle + endAngle) / 2;
 
@@ -854,8 +854,14 @@ function drawWheelWedge(ctx, cx, cy, radius, startAngle, endAngle, color, iconIm
     const ix = cx + Math.cos(mid) * iconDist;
     const iy = cy + Math.sin(mid) * iconDist;
     ctx.save();
+    // CRÍTICO: sin esto, el icono hereda la rotación de toda la ruleta y en
+    // la mayoría de los frames queda de costado o boca abajo — prácticamente
+    // invisible contra el degradado de color. Lo compensamos acá para que
+    // SIEMPRE se vea derecho, gire lo que gire la ruleta por detrás.
+    ctx.translate(ix, iy);
+    ctx.rotate(counterRotation);
     if (dim) ctx.globalAlpha = 0.55;
-    ctx.drawImage(iconImg, ix - iconSize / 2, iy - iconSize / 2, iconSize, iconSize);
+    ctx.drawImage(iconImg, -iconSize / 2, -iconSize / 2, iconSize, iconSize);
     ctx.restore();
   }
 }
@@ -900,7 +906,7 @@ function generateEventWheelFrame(forcedResultKey = null, iconMap = null) {
     const type = EVENT_TYPE_LIST[i];
     const icon = iconMap?.get(type.key) || null;
     const isLanded = Boolean(forcedResultKey) && i === landedIndex;
-    drawWheelWedge(ctx, 0, 0, radius, i * wedgeAngle, (i + 1) * wedgeAngle, type.color, icon, Boolean(forcedResultKey) && !isLanded);
+    drawWheelWedge(ctx, 0, 0, radius, i * wedgeAngle, (i + 1) * wedgeAngle, type.color, icon, Boolean(forcedResultKey) && !isLanded, -rotation);
   }
   ctx.restore();
 
@@ -1004,19 +1010,36 @@ function buildEventEndedContainer(eventType) {
 }
 
 /** Encabezado del anuncio de /roll — se manda antes de animar la carta. */
-function buildRollSpinContainer(attachmentName = 'rng-card.png') {
-  return new ContainerBuilder()
-    .setAccentColor(CONFIG.COLORS.RNG_RARO)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent('# 🎰 Tirando...'))
-    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)));
+/** "1 en 300" en vez de "0.33%" — mucho más intuitivo para un juego de RNG, mismo estilo que usan los juegos de Roblox en los que te inspiraste. */
+function oddsLabel(item) {
+  const oneInX = Math.max(1, Math.round(100 / item.weight));
+  return `1 en ${formatNumber(oneInX)}`;
 }
 
-/** Resultado final de /roll: qué salió, y tu nuevo saldo de Feathers. */
-function buildRollResultContainer(item, feathersLeft, attachmentName = 'rng-card.png') {
+/**
+ * Animación de /roll SIN Canvas — puro Components V2, así no genera ni
+ * sube ninguna imagen en cada frame (mucho más liviano en CPU y ancho de
+ * banda que la versión anterior). `flickerItem` es el tramo que le toca
+ * mostrar a ESTE frame; el color de acento cambia junto con él para que
+ * se sienta como que algo está girando de verdad.
+ */
+function buildRollSpinContainer(flickerItem) {
+  return new ContainerBuilder()
+    .setAccentColor(flickerItem.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(['# 🎰 Tirando...', `## ${flickerItem.emoji} ${flickerItem.name}`, `-# ${flickerItem.tier} · ${oddsLabel(flickerItem)}`].join('\n')),
+    );
+}
+
+/** Resultado final de /roll: qué salió, sus probabilidades reales, y tu nuevo saldo de Feathers. */
+function buildRollResultContainer(item, feathersLeft) {
   return new ContainerBuilder()
     .setAccentColor(item.color)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${item.emoji} ¡Salió ${item.name}!\n-# Rareza: **${item.tier}** · vale \`${item.fragments}\` Fragmentos si lo vendés`))
-    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${attachmentName}`)))
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `# ${item.emoji} ¡Salió ${item.name}!\n-# Rareza: **${item.tier}** · **${oddsLabel(item)}** · vale \`${item.fragments}\` Fragmentos si lo vendés`,
+      ),
+    )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`**${FEATHER_EMOJI} Te quedan:** \`${formatNumber(feathersLeft)}\` Feathers · usa \`/sell\` cuando quieras vender tu inventario`),
@@ -1092,139 +1115,6 @@ function eventBannerLine(activeEvent) {
   const type = EVENT_TYPES[activeEvent.key];
   if (!type) return null;
   return `🎉 **Evento activo: ${type.name} ${type.emoji}** — termina <t:${toUnixSeconds(activeEvent.endsAt)}:R>`;
-}
-
-// ============================================================================
-// MOTOR DE CANVAS — RNG (/roll). Cuarta identidad visual, a propósito
-// distinta de las otras tres: una carta VERTICAL tipo gacha (ni tira
-// horizontal, ni ring, ni ruleta circular), con un orbe brillante en el
-// centro y el icono del objeto adentro. Más rareza = más brillo y más
-// destellos alrededor — "Secreto" enciende toda la carta.
-// ============================================================================
-
-const RNG_CARD_W = 420;
-const RNG_CARD_H = 560;
-const RNG_ICON_CODEPOINTS = {
-  COMUN: '2699-fe0f',
-  POCO_COMUN: '1f527',
-  RARO: '1f537',
-  EPICO: '1f7e3',
-  LEGENDARIO: '1f7e0',
-  MITICO: '1f534',
-  SECRETO: '2728',
-};
-
-async function preloadRngIcons() {
-  const entries = await Promise.all(
-    RNG_ITEM_LIST.map(async (item) => [item.key, await loadEmojiImage(RNG_ICON_CODEPOINTS[item.key])]),
-  );
-  return new Map(entries);
-}
-
-function drawSparkle(ctx, x, y, size, color) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(0, -size);
-  ctx.lineTo(size * 0.28, -size * 0.28);
-  ctx.lineTo(size, 0);
-  ctx.lineTo(size * 0.28, size * 0.28);
-  ctx.lineTo(0, size);
-  ctx.lineTo(-size * 0.28, size * 0.28);
-  ctx.lineTo(-size, 0);
-  ctx.lineTo(-size * 0.28, -size * 0.28);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-/**
- * Dibuja la carta ya "revelada" para itemKey (o un tramo al azar si
- * itemKey es null, para el efecto de flicker antes de la revelación
- * final). rarityIndex es la posición del tramo en RNG_ITEM_LIST (0 = más
- * común) — se usa para escalar cuántos destellos y cuánto brillo tiene la
- * carta, así "Secreto" se ve dramáticamente distinto de "Común".
- */
-function generateRngCardFrame(itemKey, iconMap = null) {
-  const item = RNG_ITEMS[itemKey] || RNG_ITEM_LIST[0];
-  const rarityIndex = RNG_ITEM_LIST.findIndex((i) => i.key === item.key);
-  const intensity = rarityIndex / (RNG_ITEM_LIST.length - 1); // 0 (Común) .. 1 (Secreto)
-
-  const canvas = createCanvas(RNG_CARD_W, RNG_CARD_H);
-  const ctx = canvas.getContext('2d');
-  const { r, g, b } = hexToRgb(item.color);
-  const cx = RNG_CARD_W / 2;
-  const cy = RNG_CARD_H / 2 - 30;
-
-  const bg = ctx.createRadialGradient(cx, cy, 10, cx, cy, RNG_CARD_H * 0.75);
-  bg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.25 + intensity * 0.35})`);
-  bg.addColorStop(1, '#0a0a0f');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, RNG_CARD_W, RNG_CARD_H);
-
-  // Marco tipo carta, con esquinas — bisel más grueso mientras más raro.
-  ctx.save();
-  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.6 + intensity * 0.4})`;
-  ctx.shadowBlur = 16 + intensity * 26;
-  ctx.strokeStyle = `rgba(${Math.min(255, r + 50)}, ${Math.min(255, g + 50)}, ${Math.min(255, b + 50)}, 0.95)`;
-  ctx.lineWidth = 4 + intensity * 3;
-  roundRectPath(ctx, 18, 18, RNG_CARD_W - 36, RNG_CARD_H - 36, 24);
-  ctx.stroke();
-  ctx.restore();
-
-  // Destellos alrededor — cuantos más, más raro el objeto.
-  const sparkleCount = Math.round(4 + intensity * 14);
-  for (let i = 0; i < sparkleCount; i++) {
-    const angle = (i / sparkleCount) * Math.PI * 2 + intensity;
-    const dist = 190 + (i % 3) * 14;
-    const sx = cx + Math.cos(angle) * dist * 0.62;
-    const sy = cy + Math.sin(angle) * dist * 0.78;
-    const size = 4 + Math.random() * (3 + intensity * 5);
-    drawSparkle(ctx, sx, sy, size, `rgba(${Math.min(255, r + 80)}, ${Math.min(255, g + 80)}, ${Math.min(255, b + 80)}, ${0.5 + Math.random() * 0.4})`);
-  }
-
-  // Orbe central.
-  const orbR = 92;
-  const orb = ctx.createRadialGradient(cx - 20, cy - 20, 6, cx, cy, orbR);
-  orb.addColorStop(0, `rgba(${Math.min(255, r + 90)}, ${Math.min(255, g + 90)}, ${Math.min(255, b + 90)}, 1)`);
-  orb.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.9)`);
-  ctx.save();
-  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 1)`;
-  ctx.shadowBlur = 30 + intensity * 40;
-  ctx.fillStyle = orb;
-  ctx.beginPath();
-  ctx.arc(cx, cy, orbR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, orbR, 0, Math.PI * 2);
-  ctx.stroke();
-
-  const icon = iconMap?.get(item.key) || null;
-  if (icon) {
-    const iconSize = 88;
-    ctx.drawImage(icon, cx - iconSize / 2, cy - iconSize / 2, iconSize, iconSize);
-  }
-
-  // Nombre del tramo de rareza, abajo de la carta.
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.font = `bold ${22 + intensity * 4}px sans-serif`;
-  ctx.fillStyle = `rgba(${Math.min(255, r + 70)}, ${Math.min(255, g + 70)}, ${Math.min(255, b + 70)}, 1)`;
-  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.9)`;
-  ctx.shadowBlur = 14;
-  ctx.fillText(item.tier.toUpperCase(), cx, cy + orbR + 56);
-  ctx.restore();
-
-  return canvas.toBuffer('image/png');
-}
-
-function rngCardFrameAttachment(itemKey, iconMap = null, name = 'rng-card.png') {
-  const buffer = generateRngCardFrame(itemKey, iconMap);
-  return new AttachmentBuilder(buffer, { name });
 }
 
 // ============================================================================
@@ -2323,8 +2213,6 @@ module.exports = {
   buildRollNotEnoughContainer,
   buildSellResultContainer,
   buildRedeemResultContainer,
-  rngCardFrameAttachment,
-  preloadRngIcons,
   buildEventStatusContainer,
   eventWheelFrameAttachment,
   preloadEventIcons,

@@ -1,5 +1,17 @@
 # Xerion v2.0.5 ULTRA — Qué cambió
 
+## 🎰 `/roll` sin Canvas — ahora es pura animación de embeds
+
+Se sacó el Canvas del todo de `/roll`: ya no genera ni sube ninguna imagen en cada tirada. La animación de "girando" ahora cambia de texto y color en cada frame usando solo Components V2 — mucho más liviano en CPU y en ancho de banda, no debería notarse lag ni comerse de más tu plan de hosting.
+
+De paso, las probabilidades ahora se muestran como **"1 en X"** en vez de porcentaje (igual que los juegos de RNG de Roblox en los que te inspiraste) — se ve en cada tirada, junto con la rareza y cuántos Fragmentos vale. Mantuve las mismas 7 probabilidades que ya estaban probadas y balanceadas (Común 1 en 2, hasta Secreto 1 en 10.000) — ninguna cae justo en "1 en 300", así que si querías ese número específico para algún tramo en particular, decime cuál y lo ajusto.
+
+## 🌀 Arreglé la ruleta de eventos del owner — el bug de los iconos era real
+
+Tenías razón, y encontré la causa exacta: los iconos SÍ se dibujaban, pero giraban junto con toda la ruleta — en la mayoría de los frames terminaban de costado o boca abajo contra el fondo de color, prácticamente invisibles. Ahora cada icono se contra-rota para quedar siempre derecho, gire lo que gire la ruleta por detrás. De paso encontré y arreglé 2 iconos que tenían el código equivocado (Lluvia de Plumas usaba un águila en vez de la pluma con fuego que usa el resto del bot, y Cofres Abundantes no coincidía con su propio emoji).
+
+---
+
 ## 🔴 Arreglo urgente: el bot no arrancaba
 
 La página de estado (`index.js`) armaba las tarjetas de cofres buscando el rol "ARISE" a mano para mostrar el porcentaje — el Cofre OG no tiene ningún rol con esa key, así que apenas cargaba `index.js` (antes incluso de conectar con Discord) el bot explotaba con `Cannot read properties of undefined (reading 'chance')`. Es el mismo tipo de bug que ya había arreglado en `visuals.js`, pero en otro archivo que no había revisado con el mismo detalle. Arreglado igual que el otro: busca la recompensa con menos % en la tabla de cada cofre, sin asumir ningún rol fijo. Agregué `require('./index.js')` a mi batería de pruebas para que esto no se me vuelva a pasar — antes solo probaba los módulos que `index.js` usa, no `index.js` en sí.
