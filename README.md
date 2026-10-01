@@ -81,16 +81,24 @@ límite máximo de 300.000 Candys por reclamo. El último `daily` del evento es 
 
 ## Render
 
-`render.yaml` crea un servicio web Free y comprueba `/health`. Añade
-`BOT_TOKEN` y `DATABASE_URL` como variables secretas/privadas en Render; no
-las guardes en el repositorio. Neon conserva la economía fuera del sistema de
-archivos temporal.
+`render.yaml` configura un servicio web **Starter** y comprueba `/health`.
+Para crearlo desde el panel:
 
-Render Free puede suspender el servicio tras inactividad y no es una garantía
-de disponibilidad continua ni de capacidad para 10.000 usuarios reales. El
-plan Starter publicado cuesta US$7/mes; el uso de Neon u otros servicios puede
-sumarse. No se puede garantizar un tope total de facturación de US$9 desde el
-código.
+1. Abre Render y elige **New → Blueprint**.
+2. Conecta GitHub y selecciona `ultra3-dev/Xerion`, rama `main`.
+3. Revisa el Blueprint que Render lee desde `render.yaml` y continúa con
+   **Deploy Blueprint**.
+4. Cuando Render pida las variables privadas, completa `BOT_TOKEN` con el token
+   del bot de Discord y `DATABASE_URL` con la URL de conexión de Neon. Escríbelas
+   directamente en Render; nunca las guardes en GitHub ni las pegues en el chat.
+5. Espera a que el servicio aparezca como **Live**. El build ejecuta `npm ci`,
+   inicia con `npm start` y el health check usa `/health`.
+
+El Blueprint fija `NODE_ENV=production`, por lo que el bot exige `DATABASE_URL`
+y no cae en almacenamiento local efímero. Render publica Starter a US$7/mes;
+Free puede suspenderse tras 15 minutos sin tráfico y desconectar el bot. Neon,
+impuestos u otros recursos pueden sumar cargos: el código no garantiza un tope
+total de facturación de US$9 ni capacidad para 10.000 usuarios reales.
 
 ## Verificación sintética
 
