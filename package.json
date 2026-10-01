@@ -1,0 +1,20 @@
+{
+  "name": "halloween-economy-bot",
+  "version": "1.0.0",
+  "description": "Bot de Discord de economía de Halloween (Candys) con Components V2 — prefijo Xn",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "load-test": "node scripts/load-test.js",
+    "test": "node --test scripts/logic.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.17.0",
+    "dotenv": "^16.4.7",
+    "pg": "^8.16.3"
+  }
+}

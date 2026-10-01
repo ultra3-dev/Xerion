@@ -1,1 +1,121 @@
-# Xerion
+# 🍬 Halloween Economy Bot (Xn) — v1.0.0 Halloween Release
+
+Bot de Discord de economía de Halloween con RPG, casino y **50 comandos**. Usa
+Components V2 y el prefijo `xn` (no distingue mayúsculas).
+
+## Instalación local
+
+Requiere Node.js 18 o superior.
+
+```sh
+npm ci
+cp .env.example .env
+npm start
+```
+
+Configura `BOT_TOKEN` en `.env`. Para desarrollo puedes dejar `DATABASE_URL`
+vacío y se usará `data/economy.json`. En producción, `DATABASE_URL` es
+obligatorio: el bot falla al iniciar si falta, en lugar de perder progreso en
+el disco efímero.
+
+## Persistencia con Neon
+
+Configura la URL de conexión como `DATABASE_URL` en el entorno del servicio.
+El bot usa la tabla existente `public.xerion_economy_users` (JSONB por perfil)
+y la crea solo si no existe. No requiere copiar credenciales al código ni al
+ZIP. Si la tabla está vacía y encuentra un `data/economy.json` local, importa
+los perfiles una vez; nunca reemplaza una tabla que ya contiene datos.
+
+## Preparación de Discord
+
+En Discord Developer Portal → **Bot**, activa:
+
+- Message Content Intent
+- Server Members Intent
+
+El bot necesita ver canales, enviar mensajes, insertar enlaces y gestionar
+roles. Para entregar roles, coloca el rol del bot por encima de los nueve roles
+del evento.
+
+## Comandos (50)
+
+**Economía (12):** `balance` (`bal`, acepta `@usuario`) · `profile` (acepta
+`@usuario`) · `deposit` (`dep`) · `withdraw` (`with`) · `pay` · `debt` ·
+`paydebt` (`pd`) · `bounty` (`bnt`) · `leaderboard` (`top`) · `serverstats`
+(`stats`) · `cooldowns` (`cd`) · `inventory` (`inv`, acepta `@usuario`)
+
+**Ganancia (10):** `work` · `crime` · `beg` · `scavenge` (`scav`) · `harvest` ·
+`candyraid` (`raid`) · `daily` · `collect` · `trickortreat` (`tot`) · `rob`
+
+**RPG (10):** `class` · `hunt` · `duel` · `dungeon` (`dg`) · `boss` · `quest` ·
+`level` · `achievements` (`ach`) · `armory` (`arm`) · `equip`
+
+**Casino (6):** `gamble` (`sg`) · `slots` · `blackjack` (`bj`) · `dice` ·
+`roulette` · `wheel`
+
+**Tiendas (5):** `shop` · `eventshop` (`evshop`) · `buy` · `use` · `potions`
+
+**Información (2):** `eventinfo` (`einfo`) · `help`
+
+**Administración (5, solo `OWNER_ID`):** `addcandy` (`add`) · `removecandy`
+(`rm`) · `setdebt` (`sd`) · `givepotion` (`give`) · `resetuser` (`reset`)
+
+`xn help` muestra las categorías y controles. `balance`, `profile` e
+`inventory` consultan al usuario mencionado cuando se usa `@usuario`.
+
+## Tienda e ingresos del evento
+
+`xn shop` y `xn eventshop` publican un botón de acceso; el catálogo se abre en
+un mensaje privado (Ephemeral). Los recibos de compras con botones también son
+privados. Las respuestas normales de comandos de prefijo siguen siendo
+públicas.
+
+El evento corre en UTC desde el **3 de octubre hasta el 9 de noviembre de 2026,
+inclusive**. Tener un rol en Discord no activa por sí solo su ingreso: se debe
+comprar en la tienda del bot durante el evento. Si ya tienes ese rol, el bot no
+lo vuelve a asignar, pero sí cobra el precio para registrar la compra. `xn
+collect` reclama una vez cada 24 horas el ingreso del **mejor rol comprado**;
+no suma los ingresos de varios roles, no guarda reclamos pendientes y tiene un
+límite máximo de 300.000 Candys por reclamo. El último `daily` del evento es el
+9 de noviembre UTC.
+
+## Render
+
+`render.yaml` crea un servicio web Free y comprueba `/health`. Añade
+`BOT_TOKEN` y `DATABASE_URL` como variables secretas/privadas en Render; no
+las guardes en el repositorio. Neon conserva la economía fuera del sistema de
+archivos temporal.
+
+Render Free puede suspender el servicio tras inactividad y no es una garantía
+de disponibilidad continua ni de capacidad para 10.000 usuarios reales. El
+plan Starter publicado cuesta US$7/mes; el uso de Neon u otros servicios puede
+sumarse. No se puede garantizar un tope total de facturación de US$9 desde el
+código.
+
+## Verificación sintética
+
+Las pruebas de lógica cubren el total de comandos, límites y fechas del evento:
+
+```sh
+npm test
+```
+
+La simulación de carga puede ejecutarse por separado:
+
+```sh
+npm run load-test
+```
+
+Genera 10.000 perfiles y ejecuta acciones económicas localmente en un archivo
+temporal. No llama a Discord ni a Neon y **no** demuestra capacidad de
+producción, usuarios concurrentes reales o latencia de red.
+
+## Archivos principales
+
+| Archivo | Función |
+|---|---|
+| `config.js` | Recompensas, probabilidades, cooldowns, evento y tiendas |
+| `database.js` | Neon/PostgreSQL en producción; JSON local en desarrollo |
+| `economy.js` | Lógica de economía, RPG, casino y tienda |
+| `ui.js` | Mensajes Components V2, menús y botones |
+| `index.js` | Cliente Discord, listeners y comandos |
