@@ -348,7 +348,12 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
           .setDisabled(disabled),
       );
     c.addSectionComponents(section);
-    if (i < cfg.EVENT_SHOP.length - 1) c.addSeparatorComponents(sep());
+    // Components V2 permits at most 40 components total, counting nested
+    // section text and accessory buttons. Group roles with fewer separators
+    // so the private event-shop reply stays under Discord's limit.
+    if ((i + 1) % 3 === 0 && i < cfg.EVENT_SHOP.length - 1) {
+      c.addSeparatorComponents(sep());
+    }
   });
   c.addSeparatorComponents(sep());
   c.addActionRowComponents(row(linkButton(cfg.EVENT_INVITE_URL, 'Ver evento en Discord', '🔗')));

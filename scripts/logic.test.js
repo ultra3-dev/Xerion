@@ -14,6 +14,15 @@ delete process.env.DATABASE_URL;
 const cfg = require('../config');
 const db = require('../database');
 const economy = require('../economy');
+const ui = require('../ui');
+
+function countComponents(value) {
+  if (Array.isArray(value)) return value.reduce((total, item) => total + countComponents(item), 0);
+  if (!value || typeof value !== 'object') return 0;
+  let total = typeof value.type === 'number' ? 1 : 0;
+  for (const child of Object.values(value)) total += countComponents(child);
+  return total;
+}
 
 before(async () => {
   await db.loadDB();
@@ -33,6 +42,17 @@ test('the release exposes exactly 50 prefix command handlers', () => {
 test('the configured event window includes Oct 3 through Nov 9 in UTC', () => {
   assert.equal(cfg.EVENT_START.toISOString(), '2026-10-03T00:00:00.000Z');
   assert.equal(cfg.EVENT_END.toISOString(), '2026-11-10T00:00:00.000Z');
+});
+
+test('both shop replies stay within Discord’s 40-component limit', () => {
+  const userId = '123456789012345678';
+  const member = { roles: { cache: { has: () => false } } };
+  const user = { eventRolesPurchased: [] };
+  const potionShop = ui.shopContainer(cfg, userId);
+  const eventShop = ui.eventShopContainer(cfg, new Date(cfg.EVENT_START), member, userId, user);
+
+  assert.ok(countComponents(potionShop.components) <= 40);
+  assert.ok(countComponents(eventShop.components) <= 40);
 });
 
 test('collect pays only the best purchased role, caps the payout, and shares one 24-hour cooldown', () => {
