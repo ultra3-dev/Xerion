@@ -31,11 +31,102 @@ function hasEffect(user, id) {
 // ---------- Clase y arma (bonos permanentes y gratis) ----------
 
 function classDef(id) {
-  return cfg.CLASSES.find((c) => c.id === id);
+  const normalize = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  const normalized = normalize(id);
+  return cfg.CLASSES.find((c) => normalize(c.id) === normalized || normalize(c.name) === normalized);
 }
 
 function weaponDef(id) {
   return cfg.WEAPONS.find((w) => w.id === id);
+}
+
+function awardMaterial(user, action) {
+  const rule = cfg.MATERIAL_DROP_RULES[action];
+  if (!rule || Math.random() >= rule.chance) return null;
+  const pool = cfg.MATERIALS.filter((material) => rule.tiers.includes(material.tier));
+  if (!pool.length) return null;
+  const material = pick(pool);
+  const quantity = db.randomInt(rule.min, rule.max);
+  if (!db.addMaterial(user, material.id, quantity)) return null;
+  return { material, quantity };
+}
+
+function questStatus(user) {
+  if (!user.activeQuest) return null;
+  const definition = cfg.QUESTS.find((quest) => quest.id === user.activeQuest.id);
+  if (!definition) return null;
+  const progress = Math.min(definition.target, Math.max(0, Number(user.activeQuest.progress) || 0));
+  return {
+    ...definition,
+    progress,
+    completed: progress >= definition.target,
+  };
+}
+
+function advanceQuest(user, action) {
+  const current = questStatus(user);
+  if (!current || current.action !== action || current.completed) return;
+  user.activeQuest.progress = current.progress + 1;
+  db.markDirty(user);
+}
+
+function doQuest(user) {
+  const active = questStatus(user);
+  if (active) return { quest: active, started: false };
+
+  const history = new Set(Array.isArray(user.questHistory) ? user.questHistory : []);
+  let available = cfg.QUESTS.filter((quest) => !history.has(quest.id));
+  if (!available.length) {
+    user.questHistory = [];
+    available = cfg.QUESTS;
+  }
+  const selected = pick(available);
+  user.questHistory.push(selected.id);
+  user.activeQuest = { id: selected.id, progress: 0, startedAt: Date.now() };
+  db.markDirty(user);
+  return { quest: questStatus(user), started: true };
+}
+
+function claimQuest(user) {
+  const quest = questStatus(user);
+  if (!quest) return { error: 'no_active' };
+  if (!quest.completed) return { error: 'incomplete', quest };
+  if (db.isOnCooldown(user, 'quest')) {
+    return { error: 'cooldown', remaining: db.getCooldownRemaining(user, 'quest'), quest };
+  }
+  const base = db.randomInt(cfg.QUEST_REWARD_MIN, cfg.QUEST_REWARD_MAX);
+  const gotBonus = Math.random() < cfg.QUEST_BONUS_CHANCE;
+  const bonus = gotBonus ? db.randomInt(cfg.QUEST_BONUS_MIN, cfg.QUEST_BONUS_MAX) : 0;
+  const total = Math.min(
+    Math.round((base + bonus) * (1 + permanentBonus(user, 'questReward'))),
+    cfg.MAX_SINGLE_GAIN,
+  );
+  user.cash += total;
+  db.addXp(user, cfg.XP_PER_ACTION.quest);
+  db.setCooldown(user, 'quest', cfg.COOLDOWNS.quest);
+  user.activeQuest = null;
+  const materialDrop = awardMaterial(user, 'quest');
+  db.markDirty(user);
+  return { quest, total, gotBonus, materialDrop, flavor: pick(FLAVOR.quest) };
+}
+
+function getCollectCooldownMs(user) {
+  const purchased = new Set(Array.isArray(user.eventRolesPurchased) ? user.eventRolesPurchased : []);
+  const eligibleRole = cfg.EVENT_SHOP
+    .filter((role) => purchased.has(role.roleId))
+    .sort((a, b) => b.collectReward - a.collectReward)[0];
+  return eligibleRole ? eligibleRole.collectCooldownMs : cfg.COOLDOWNS.collect;
+}
+
+function creditCasinoWin(user, requestedAmount) {
+  const amount = Math.max(0, Math.round(requestedAmount));
+  const payout = Math.min(amount, Number.MAX_SAFE_INTEGER - user.cash);
+  user.cash += payout;
+  return payout;
 }
 
 function classBonusValue(user, key) {
@@ -293,8 +384,10 @@ function doWork(user) {
   user.cash += reward;
   db.incrementStat(user, 'totalWorked');
   db.addXp(user, cfg.XP_PER_ACTION.work);
+  advanceQuest(user, 'work');
+  const materialDrop = awardMaterial(user, 'work');
   db.markDirty(user);
-  return { reward, flavor: pick(FLAVOR.work) };
+  return { reward, materialDrop, flavor: pick(FLAVOR.work) };
 }
 
 function doBeg(user) {
@@ -306,8 +399,9 @@ function doBeg(user) {
   let reward = Math.round(db.randomInt(cfg.BEG_MIN, cfg.BEG_MAX) * (1 + permanentBonus(user, 'begReward')));
   reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
   user.cash += reward;
+  const materialDrop = awardMaterial(user, 'beg');
   db.markDirty(user);
-  return { reward, flavor: pick(FLAVOR.begGive) };
+  return { reward, materialDrop, flavor: pick(FLAVOR.begGive) };
 }
 
 function doScavenge(user) {
@@ -320,7 +414,9 @@ function doScavenge(user) {
   user.cash += reward;
   db.incrementStat(user, 'totalScavenged');
   db.addXp(user, cfg.XP_PER_ACTION.scavenge);
-  return { reward, flavor: pick(FLAVOR.scavenge) };
+  advanceQuest(user, 'scavenge');
+  const materialDrop = awardMaterial(user, 'scavenge');
+  return { reward, materialDrop, flavor: pick(FLAVOR.scavenge) };
 }
 
 const HARVEST_FLAVOR = [
@@ -341,8 +437,10 @@ function doHarvest(user) {
   user.cash += reward;
   db.incrementStat(user, 'totalHarvested');
   db.addXp(user, cfg.XP_PER_ACTION.harvest);
+  advanceQuest(user, 'harvest');
+  const materialDrop = awardMaterial(user, 'harvest');
   db.markDirty(user);
-  return { reward, flavor: pick(HARVEST_FLAVOR) };
+  return { reward, materialDrop, flavor: pick(HARVEST_FLAVOR) };
 }
 
 function doCandyRaid(user) {
@@ -357,8 +455,10 @@ function doCandyRaid(user) {
     user.cash += reward;
     db.incrementStat(user, 'candyRaids');
     db.addXp(user, cfg.XP_PER_ACTION.candyraid);
+    advanceQuest(user, 'candyraid');
+    const materialDrop = awardMaterial(user, 'candyraid');
     db.markDirty(user);
-    return { success: true, reward, flavor: pick(FLAVOR.candyraid) };
+    return { success: true, reward, materialDrop, flavor: pick(FLAVOR.candyraid) };
   }
   const { debtAmount, revived } = applyDebt(user, db.randomInt(cfg.CANDYRAID_FAIL_DEBT_MIN, cfg.CANDYRAID_FAIL_DEBT_MAX));
   return { success: false, debtAmount, revived, flavor: 'Un gato espectral se llevó tu bolsa y te dejó una pequeña multa.' };
@@ -371,8 +471,9 @@ function doTrickOrTreat(user) {
     let reward = db.randomInt(cfg.TOT_TREAT_MIN, cfg.TOT_TREAT_MAX);
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
+    const materialDrop = awardMaterial(user, 'trickortreat');
     db.markDirty(user);
-    return { treat: true, reward, flavor: pick(FLAVOR.totTreat) };
+    return { treat: true, reward, materialDrop, flavor: pick(FLAVOR.totTreat) };
   }
   const base = db.randomInt(cfg.TOT_TRICK_DEBT_MIN, cfg.TOT_TRICK_DEBT_MAX);
   const { debtAmount, revived } = applyDebt(user, base);
@@ -388,8 +489,9 @@ function doCrime(user) {
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
     db.addXp(user, cfg.XP_PER_ACTION.crime);
+    const materialDrop = awardMaterial(user, 'crime');
     db.markDirty(user);
-    return { success: true, reward, flavor: pick(FLAVOR.crimeWin) };
+    return { success: true, reward, materialDrop, flavor: pick(FLAVOR.crimeWin) };
   }
   const base = db.randomInt(cfg.CRIME_DEBT_MIN, cfg.CRIME_DEBT_MAX);
   const { debtAmount, revived } = applyDebt(user, base);
@@ -426,8 +528,9 @@ function attemptRob(robber, target) {
     target.cooldowns.robProtection = Date.now() + cfg.ROB_PROTECTION_MS;
     db.incrementStat(robber, 'robWins');
     db.addXp(robber, cfg.XP_PER_ACTION.rob);
+    const materialDrop = awardMaterial(robber, 'rob');
     db.markDirty(robber, target);
-    return { success: true, amount, bountyClaimed, flavor: pick(FLAVOR.robWin) };
+    return { success: true, amount, bountyClaimed, materialDrop, flavor: pick(FLAVOR.robWin) };
   }
   const base = db.randomInt(cfg.ROB_FAIL_DEBT_MIN, cfg.ROB_FAIL_DEBT_MAX);
   const { debtAmount, revived } = applyDebt(robber, base);
@@ -448,8 +551,10 @@ function doHunt(user) {
     user.cash += reward;
     db.incrementStat(user, 'huntWins');
     db.addXp(user, cfg.XP_PER_ACTION.hunt);
+    advanceQuest(user, 'hunt');
+    const materialDrop = awardMaterial(user, 'hunt');
     db.markDirty(user);
-    return { success: true, reward, monster };
+    return { success: true, reward, monster, materialDrop };
   }
   db.markDirty(user);
   return { success: false, monster };
@@ -467,8 +572,10 @@ function doDungeon(user) {
     user.cash += reward;
     db.incrementStat(user, 'dungeonClears');
     db.addXp(user, cfg.XP_PER_ACTION.dungeon);
+    advanceQuest(user, 'dungeon');
+    const materialDrop = awardMaterial(user, 'dungeon');
     db.markDirty(user);
-    return { success: true, reward, flavor: pick(FLAVOR.dungeonWin) };
+    return { success: true, reward, materialDrop, flavor: pick(FLAVOR.dungeonWin) };
   }
   const base = db.randomInt(cfg.DUNGEON_DEBT_MIN, cfg.DUNGEON_DEBT_MAX);
   const { debtAmount, revived } = applyDebt(user, base);
@@ -487,27 +594,14 @@ function doBoss(user) {
     user.cash += reward;
     db.incrementStat(user, 'bossWins');
     db.addXp(user, cfg.XP_PER_ACTION.boss);
+    advanceQuest(user, 'boss');
+    const materialDrop = awardMaterial(user, 'boss');
     db.markDirty(user);
-    return { success: true, reward };
+    return { success: true, reward, materialDrop };
   }
   const base = db.randomInt(cfg.BOSS_DEBT_MIN, cfg.BOSS_DEBT_MAX);
   const { debtAmount, revived } = applyDebt(user, base);
   return { success: false, debtAmount, revived };
-}
-
-// ---------- RPG: misión diaria ----------
-
-function doQuest(user) {
-  if (db.isOnCooldown(user, 'quest')) return { error: 'cooldown', remaining: db.getCooldownRemaining(user, 'quest') };
-  db.setCooldown(user, 'quest', cfg.COOLDOWNS.quest);
-  const base = db.randomInt(cfg.QUEST_REWARD_MIN, cfg.QUEST_REWARD_MAX);
-  const gotBonus = Math.random() < cfg.QUEST_BONUS_CHANCE;
-  const bonus = gotBonus ? db.randomInt(cfg.QUEST_BONUS_MIN, cfg.QUEST_BONUS_MAX) : 0;
-  const total = Math.min(Math.round((base + bonus) * (1 + permanentBonus(user, 'questReward'))), cfg.MAX_SINGLE_GAIN);
-  user.cash += total;
-  db.addXp(user, cfg.XP_PER_ACTION.quest);
-  db.markDirty(user);
-  return { total, gotBonus, flavor: pick(FLAVOR.quest) };
 }
 
 // Mismo día calendario (UTC) que el fin del evento: la recompensa diaria se
@@ -527,8 +621,9 @@ function doDaily(user, now) {
     ? cfg.DAILY_EVENT_FINALE_BONUS
     : Math.min(db.randomInt(cfg.DAILY_REWARD_MIN, cfg.DAILY_REWARD_MAX), cfg.MAX_SINGLE_GAIN);
   user.cash += total;
+  const materialDrop = awardMaterial(user, 'daily');
   db.markDirty(user);
-  return { total, finale, flavor: pick(FLAVOR.daily) };
+  return { total, finale, materialDrop, flavor: pick(FLAVOR.daily) };
 }
 
 // ---------- RPG: duelo (reto/aceptar) ----------
@@ -536,6 +631,7 @@ function doDaily(user, now) {
 const pendingDuels = new Map(); // targetId -> { challengerId, bet, createdAt }
 
 function createDuelChallenge(challengerId, challengerUser, targetId, bet) {
+  if (!Number.isSafeInteger(bet) || bet < 1) return { error: 'invalid_bet' };
   if (db.isOnCooldown(challengerUser, 'duel')) {
     return { error: 'cooldown', remaining: db.getCooldownRemaining(challengerUser, 'duel') };
   }
@@ -549,6 +645,7 @@ function getDuelChallenge(targetId) { return pendingDuels.get(targetId); }
 function cancelDuelChallenge(targetId) { pendingDuels.delete(targetId); }
 
 function resolveDuel(challenger, challengerId, target, targetId, bet) {
+  if (!Number.isSafeInteger(bet) || bet < 1 || !Number.isSafeInteger(bet * 2)) return { error: 'invalid_bet' };
   if (challenger.cash < bet) return { error: 'challenger_insufficient' };
   if (target.cash < bet) return { error: 'target_insufficient' };
   challenger.cash -= bet;
@@ -560,14 +657,20 @@ function resolveDuel(challenger, challengerId, target, targetId, bet) {
     challenger.cash += pot;
     db.incrementStat(challenger, 'duelWins');
     db.addXp(challenger, cfg.XP_PER_ACTION.duel);
+    advanceQuest(challenger, 'duel');
   } else {
     target.cash += pot;
     db.incrementStat(target, 'duelWins');
     db.addXp(target, cfg.XP_PER_ACTION.duel);
+    advanceQuest(target, 'duel');
   }
+  const winner = challengerWins ? challenger : target;
+  const materialDrop = awardMaterial(winner, 'duel');
+  const narratives = cfg.DUEL_NARRATIONS[challengerWins ? 'challengerWins' : 'targetWins'];
+  const narrative = pick(narratives);
   db.markDirty(challenger, target);
   cancelDuelChallenge(targetId);
-  return { challengerWins, pot, bet };
+  return { challengerWins, pot, bet, narrative, materialDrop };
 }
 
 // ---------- RPG: clase ----------
@@ -576,10 +679,10 @@ function setClass(user, classId) {
   const c = classDef(classId);
   if (!c) return { error: 'notfound' };
   if (user.class) {
-    return { error: user.class === classId ? 'same_class' : 'already_chosen' };
+    return { error: user.class === c.id ? 'same_class' : 'already_chosen' };
   }
   if (db.getLevel(user.xp) < 5) return { error: 'level_required', level: 5 };
-  user.class = classId;
+  user.class = c.id;
   db.markDirty(user);
   return { classDef: c };
 }
@@ -629,12 +732,10 @@ function checkAchievements(user) {
 function gamble(user, bet) {
   if (!bet || bet <= 0) return { error: 'invalid' };
   if (bet > user.cash) return { error: 'insufficient' };
-  if (bet > cfg.MAX_BET) return { error: 'maxbet' };
   user.cash -= bet;
   const win = Math.random() < cfg.GAMBLE_WIN_CHANCE;
   if (win) {
-    const payout = Math.round(bet * 2 * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
-    user.cash += payout;
+    const payout = creditCasinoWin(user, bet * 2 * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
     db.incrementStat(user, 'casinoWins');
     db.markDirty(user);
     return { win: true, payout, net: payout - bet };
@@ -656,7 +757,6 @@ function weightedSymbol() {
 function slots(user, bet) {
   if (!bet || bet <= 0) return { error: 'invalid' };
   if (bet > user.cash) return { error: 'insufficient' };
-  if (bet > cfg.MAX_BET) return { error: 'maxbet' };
   user.cash -= bet;
   const reels = [weightedSymbol(), weightedSymbol(), weightedSymbol()];
   let multiplier = 0;
@@ -665,8 +765,7 @@ function slots(user, bet) {
   } else if (reels[0] === reels[1] || reels[1] === reels[2] || reels[0] === reels[2]) {
     multiplier = cfg.SLOTS_DOUBLE_MULT;
   }
-  const payout = Math.round(bet * multiplier * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
-  user.cash += payout;
+  const payout = creditCasinoWin(user, bet * multiplier * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
   if (payout > bet) db.incrementStat(user, 'casinoWins');
   db.markDirty(user);
   return { reels, payout, net: payout - bet };
@@ -676,7 +775,6 @@ function slots(user, bet) {
 
 function playDice(user, bet, guess) {
   if (!bet || bet <= 0) return { error: 'invalid' };
-  if (bet > cfg.MAX_BET) return { error: 'maxbet' };
   if (bet > user.cash) return { error: 'insufficient' };
   if (!Number.isInteger(guess) || guess < 1 || guess > 6) return { error: 'invalid_guess' };
   user.cash -= bet;
@@ -684,8 +782,7 @@ function playDice(user, bet, guess) {
   const win = roll === guess;
   let payout = 0;
   if (win) {
-    payout = Math.round(bet * cfg.DICE_PAYOUT_MULT * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
-    user.cash += payout;
+    payout = creditCasinoWin(user, bet * cfg.DICE_PAYOUT_MULT * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
     db.incrementStat(user, 'casinoWins');
   }
   db.markDirty(user);
@@ -728,8 +825,7 @@ function playRoulette(user, bet, colorChoice) {
   const win = landed.id === choice;
   let payout = 0;
   if (win) {
-    payout = Math.round(bet * landed.mult * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
-    user.cash += payout;
+    payout = creditCasinoWin(user, bet * landed.mult * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
     db.incrementStat(user, 'casinoWins');
   }
   db.markDirty(user);
@@ -753,8 +849,7 @@ function playWheel(user, bet) {
     if (r < s.weight) { segment = s; break; }
     r -= s.weight;
   }
-  const payout = Math.round(bet * segment.mult * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
-  user.cash += payout;
+  const payout = creditCasinoWin(user, bet * segment.mult * (1 + effectBonus(user, 'pumpkin') + permanentBonus(user, 'casinoPayout')));
   if (payout > bet) db.incrementStat(user, 'casinoWins');
   db.markDirty(user);
   return { multiplier: segment.mult, payout, net: payout - bet };
@@ -796,7 +891,6 @@ function handValue(hand) {
 function startBlackjack(userId, user, bet) {
   if (!bet || bet <= 0) return { error: 'invalid' };
   if (bet > user.cash) return { error: 'insufficient' };
-  if (bet > cfg.MAX_BET) return { error: 'maxbet' };
   if (activeBlackjack.has(userId)) return { error: 'already_playing' };
   user.cash -= bet;
   db.markDirty(user);
@@ -847,7 +941,7 @@ function bjResolve(user, g) {
   } else {
     result = 'lose';
   }
-  if (payout > 0) user.cash += payout;
+  if (payout > 0) payout = creditCasinoWin(user, payout);
   if (result === 'win' || result === 'blackjack') db.incrementStat(user, 'casinoWins');
   db.markDirty(user);
   activeBlackjack.delete(g.userId);
@@ -876,18 +970,34 @@ function buyPotion(user, potionId, qty) {
 }
 
 function buyEventRole(now, user, idOrRoleId) {
-  const r = cfg.EVENT_SHOP.find((x) => x.id === idOrRoleId || x.roleId === idOrRoleId);
+  const normalizedId = String(idOrRoleId || '').trim().toLowerCase();
+  const r = cfg.EVENT_SHOP.find((x) => x.id.toLowerCase() === normalizedId || x.roleId === idOrRoleId);
   if (!r) return { error: 'notfound' };
   if (now < cfg.EVENT_START) return { error: 'notstarted' };
   if (now >= cfg.EVENT_END) return { error: 'ended' };
   if (!Array.isArray(user.eventRolesPurchased)) user.eventRolesPurchased = [];
   if (user.eventRolesPurchased.includes(r.roleId)) return { error: 'already_owned', role: r };
   if (user.debt > 0) return { error: 'debt' };
-  if (user.cash < r.price) return { error: 'insufficient' };
-  user.cash -= r.price;
+  const missingMaterials = Object.entries(r.materialRequirements || {})
+    .filter(([materialId, amount]) => (user.materials?.[materialId] || 0) < amount)
+    .map(([materialId, amount]) => ({
+      id: materialId,
+      amount,
+      owned: user.materials?.[materialId] || 0,
+    }));
+  if (missingMaterials.length) return { error: 'materials', missingMaterials, role: r };
+  const purchaseCost = Math.ceil(r.price / 2);
+  if (user.cash < purchaseCost) return { error: 'insufficient', required: purchaseCost };
+  user.cash -= purchaseCost;
+  for (const [materialId, amount] of Object.entries(r.materialRequirements || {})) {
+    if (!db.removeMaterial(user, materialId, amount)) {
+      user.cash += purchaseCost;
+      return { error: 'materials', missingMaterials: [{ id: materialId, amount, owned: user.materials?.[materialId] || 0 }], role: r };
+    }
+  }
   user.eventRolesPurchased.push(r.roleId);
   db.markDirty(user);
-  return { role: r };
+  return { role: r, purchaseCost };
 }
 
 function usePotion(user, potionId) {
@@ -902,7 +1012,10 @@ function refundEventRole(user, role) {
   if (user.eventRolesPurchased) {
     user.eventRolesPurchased = user.eventRolesPurchased.filter((roleId) => roleId !== role.roleId);
   }
-  user.cash += role.price;
+  user.cash += Math.ceil(role.price / 2);
+  for (const [materialId, amount] of Object.entries(role.materialRequirements || {})) {
+    db.addMaterial(user, materialId, amount);
+  }
   db.markDirty(user);
 }
 
@@ -918,17 +1031,14 @@ function collectEventIncome(user, now = new Date()) {
     return { error: 'cooldown', remaining: db.getCooldownRemaining(user, 'collect') };
   }
 
-  const reward = db.clamp(
-    Math.floor(eligibleRole.collectReward || 0),
-    0,
-    cfg.EVENT_COLLECT_REWARD_CAP,
-  );
+  const reward = db.clamp(Math.floor(eligibleRole.collectReward || 0), 0, cfg.EVENT_COLLECT_REWARD_CAP);
   if (reward < 1) return { error: 'invalid_reward' };
-  db.setCooldown(user, 'collect', cfg.COOLDOWNS.collect);
+  const cooldownMs = getCollectCooldownMs(user);
+  db.setCooldown(user, 'collect', cooldownMs);
   user.cash += reward;
   db.incrementStat(user, 'eventCollects');
   db.markDirty(user);
-  return { reward, role: eligibleRole, cooldownMs: cfg.COOLDOWNS.collect };
+  return { reward, role: eligibleRole, cooldownMs };
 }
 
 // ---------- Rankings / estadísticas del servidor ----------
@@ -1023,19 +1133,26 @@ function resolveWorldEvent() {
   return result;
 }
 
+function resetTransientState() {
+  pendingDuels.clear();
+  activeBlackjack.clear();
+  worldEvent = null;
+}
+
 module.exports = {
   potionDef, classDef, weaponDef, effectBonus, hasEffect, permanentBonus, parseAmount,
   earnFromMessage,
   deposit, withdraw, transfer, payDebt, placeBounty,
   doWork, doBeg, doScavenge, doHarvest, doCandyRaid, doTrickOrTreat, doCrime,
   attemptRob,
-  doHunt, doDungeon, doBoss, doQuest, doDaily,
+  doHunt, doDungeon, doBoss, doQuest, claimQuest, questStatus, doDaily,
   createDuelChallenge, getDuelChallenge, cancelDuelChallenge, resolveDuel,
   setClass, buyWeapon, equipWeapon,
   checkAchievements,
   gamble, slots, playDice, playRoulette, playWheel, normalizeRouletteColor,
   startBlackjack, getBlackjack, bjHit, bjStand, bjResolve, endBlackjack, handValue, cardSuit, cardRank,
-  buyPotion, buyEventRole, usePotion, refundEventRole, collectEventIncome,
+  buyPotion, buyEventRole, usePotion, refundEventRole, collectEventIncome, getCollectCooldownMs,
   getLeaderboard, getDebtLeaderboard, getRank, getServerStats, getLevelInfo,
   isWorldEventActive, registerWorldEventParticipant, startWorldEvent, resolveWorldEvent,
+  resetTransientState,
 };

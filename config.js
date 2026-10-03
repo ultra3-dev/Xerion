@@ -22,6 +22,65 @@ module.exports = {
   CANDY_EMOJI: '🍬',
   CANDY_NAME: 'Candys',
 
+  // --- Materiales RPG (nombres visibles en inglés) ---
+  MATERIALS: [
+    { id: 'ash', name: 'Ash', emoji: '🌫️', tier: 'common' },
+    { id: 'bone_shard', name: 'Bone Shard', emoji: '🦴', tier: 'common' },
+    { id: 'cobweb_thread', name: 'Cobweb Thread', emoji: '🕸️', tier: 'common' },
+    { id: 'moon_dust', name: 'Moon Dust', emoji: '🌙', tier: 'common' },
+    { id: 'pumpkin_seed', name: 'Pumpkin Seed', emoji: '🎃', tier: 'common' },
+    { id: 'ghost_essence', name: 'Ghost Essence', emoji: '👻', tier: 'common' },
+    { id: 'bat_wing', name: 'Bat Wing', emoji: '🦇', tier: 'common' },
+    { id: 'witch_brew', name: 'Witch Brew', emoji: '🧪', tier: 'common' },
+    { id: 'cursed_coin', name: 'Cursed Coin', emoji: '🪙', tier: 'common' },
+    { id: 'ectoplasm', name: 'Ectoplasm', emoji: '🫧', tier: 'common' },
+    { id: 'black_feather', name: 'Black Feather', emoji: '🪶', tier: 'common' },
+    { id: 'grave_dirt', name: 'Grave Dirt', emoji: '🪦', tier: 'common' },
+    { id: 'silver_dust', name: 'Silver Dust', emoji: '✨', tier: 'common' },
+    { id: 'rotten_apple', name: 'Rotten Apple', emoji: '🍎', tier: 'common' },
+    { id: 'lantern_oil', name: 'Lantern Oil', emoji: '🏮', tier: 'common' },
+    { id: 'ember_core', name: 'Ember Core', emoji: '🔥', tier: 'uncommon' },
+    { id: 'shadow_cloth', name: 'Shadow Cloth', emoji: '🖤', tier: 'uncommon' },
+    { id: 'raven_quill', name: 'Raven Quill', emoji: '🐦‍⬛', tier: 'uncommon' },
+    { id: 'crystal_shard', name: 'Crystal Shard', emoji: '🔮', tier: 'uncommon' },
+    { id: 'blood_vial', name: 'Blood Vial', emoji: '🩸', tier: 'uncommon' },
+    { id: 'spider_silk', name: 'Spider Silk', emoji: '🕷️', tier: 'uncommon' },
+    { id: 'mystic_herb', name: 'Mystic Herb', emoji: '🌿', tier: 'uncommon' },
+    { id: 'obsidian_fragment', name: 'Obsidian Fragment', emoji: '🪨', tier: 'uncommon' },
+    { id: 'phantom_glass', name: 'Phantom Glass', emoji: '🪞', tier: 'uncommon' },
+    { id: 'thorny_root', name: 'Thorny Root', emoji: '🌱', tier: 'uncommon' },
+    { id: 'spectral_thread', name: 'Spectral Thread', emoji: '🧵', tier: 'uncommon' },
+    { id: 'midnight_salt', name: 'Midnight Salt', emoji: '🧂', tier: 'uncommon' },
+    { id: 'ancient_rune', name: 'Ancient Rune', emoji: '📜', tier: 'uncommon' },
+    { id: 'frost_berry', name: 'Frost Berry', emoji: '🫐', tier: 'uncommon' },
+    { id: 'dark_matter', name: 'Dark Matter', emoji: '🌌', tier: 'rare' },
+    { id: 'cursed_candle', name: 'Cursed Candle', emoji: '🕯️', tier: 'rare' },
+    { id: 'vampire_fang', name: 'Vampire Fang', emoji: '🧛', tier: 'rare' },
+    { id: 'werewolf_claw', name: 'Werewolf Claw', emoji: '🐺', tier: 'rare' },
+    { id: 'dragon_scale', name: 'Dragon Scale', emoji: '🐉', tier: 'rare' },
+    { id: 'star_fragment', name: 'Star Fragment', emoji: '⭐', tier: 'rare' },
+    { id: 'void_crystal', name: 'Void Crystal', emoji: '💎', tier: 'rare' },
+    { id: 'soul_flame', name: 'Soul Flame', emoji: '🕯️', tier: 'rare' },
+    { id: 'pumpkin_heart', name: 'Pumpkin Heart', emoji: '🧡', tier: 'rare' },
+    { id: 'eldritch_eye', name: 'Eldritch Eye', emoji: '👁️', tier: 'rare' },
+  ],
+  MATERIAL_DROP_RULES: {
+    work: { chance: 0.22, tiers: ['common'], min: 1, max: 2 },
+    beg: { chance: 0.12, tiers: ['common'], min: 1, max: 1 },
+    scavenge: { chance: 0.35, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    harvest: { chance: 0.30, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    candyraid: { chance: 0.40, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    trickortreat: { chance: 0.18, tiers: ['common'], min: 1, max: 1 },
+    crime: { chance: 0.25, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    rob: { chance: 0.22, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    hunt: { chance: 0.45, tiers: ['common', 'uncommon'], min: 1, max: 2 },
+    dungeon: { chance: 0.70, tiers: ['uncommon', 'rare'], min: 1, max: 2 },
+    boss: { chance: 0.80, tiers: ['uncommon', 'rare'], min: 2, max: 3 },
+    duel: { chance: 0.65, tiers: ['uncommon', 'rare'], min: 1, max: 2 },
+    quest: { chance: 1, tiers: ['common', 'uncommon', 'rare'], min: 1, max: 3 },
+    daily: { chance: 0.12, tiers: ['common'], min: 1, max: 1 },
+  },
+
   // --- Colores para los Containers de Components V2 ---
   COLORS: {
     DEFAULT: 0xFF7518, // naranja calabaza
@@ -149,6 +208,22 @@ module.exports = {
   // --- RPG: duelo (duel) ---
   DUEL_TIMEOUT_MS: 60 * 1000,
   DUEL_BASE_CHANCE: 0.5,
+  DUEL_NARRATIONS: {
+    challengerWins: [
+      'El retador rompe la guardia rival y se lleva el botín.',
+      'Una estocada precisa decide el duelo a favor del retador.',
+      'El retador aprovecha una distracción y reclama la victoria.',
+      'La sombra del retador cubre la arena antes del golpe final.',
+      'El rival cae primero; el retador gana la apuesta.',
+    ],
+    targetWins: [
+      'El defensor esquiva el ataque y derrota al retador.',
+      'Una contra impecable le da la victoria al rival.',
+      'El retador pierde el equilibrio y el rival toma el botín.',
+      'El defensor aguanta el embate y gana el duelo.',
+      'La última jugada favorece al rival, que se lleva la apuesta.',
+    ],
+  },
 
   // --- RPG: mazmorra (dungeon) ---
   DUNGEON_SUCCESS_CHANCE: 0.55,
@@ -172,6 +247,16 @@ module.exports = {
   QUEST_BONUS_CHANCE: 0.15,
   QUEST_BONUS_MIN: 50,
   QUEST_BONUS_MAX: 200,
+  QUESTS: [
+    { id: 'graveyard_shift', name: 'Graveyard Shift', description: 'Completa 3 turnos de work.', action: 'work', target: 3 },
+    { id: 'lost_supplies', name: 'Lost Supplies', description: 'Busca 3 veces en scavenge.', action: 'scavenge', target: 3 },
+    { id: 'harvest_moon', name: 'Harvest Moon', description: 'Recolecta 4 veces con harvest.', action: 'harvest', target: 4 },
+    { id: 'ghost_hunter', name: 'Ghost Hunter', description: 'Gana 2 cacerías con hunt.', action: 'hunt', target: 2 },
+    { id: 'deep_delving', name: 'Deep Delving', description: 'Completa 1 dungeon.', action: 'dungeon', target: 1 },
+    { id: 'ancient_pumpkin', name: 'Ancient Pumpkin', description: 'Derrota 1 vez al boss.', action: 'boss', target: 1 },
+    { id: 'candy_raider', name: 'Candy Raider', description: 'Completa 2 Candy Raids exitosos.', action: 'candyraid', target: 2 },
+    { id: 'duel_of_shadows', name: 'Duel of Shadows', description: 'Gana 1 duelo.', action: 'duel', target: 1 },
+  ],
 
   // --- daily ---
   DAILY_REWARD_MIN: 300,
@@ -279,7 +364,6 @@ module.exports = {
   ],
 
   // --- Casino (Spooky Gamble) ---
-  MAX_BET: 3000,
   GAMBLE_WIN_CHANCE: 0.47,
   SLOTS_SYMBOLS: [
     { symbol: '🎃', weight: 30 },
@@ -370,17 +454,17 @@ module.exports = {
 
   // --- Tienda del Evento (roles) ---
   EVENT_SHOP: [
-    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 250000 },
-    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 200000 },
-    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 150000 },
-    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 100000 },
-    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 75000 },
-    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 50000 },
-    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 30000 },
-    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 15000 },
-    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 5000 },
+    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 369000, collectCooldownMs: 3 * 24 * 60 * 60 * 1000, materialRequirements: { pumpkin_heart: 5, eldritch_eye: 3, dragon_scale: 8, void_crystal: 8, soul_flame: 10 } },
+    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 200000, collectCooldownMs: 60 * 60 * 60 * 1000, materialRequirements: { star_fragment: 6, soul_flame: 5, cursed_candle: 8, raven_quill: 10 } },
+    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 150000, collectCooldownMs: 54 * 60 * 60 * 1000, materialRequirements: { dark_matter: 8, dragon_scale: 4, void_crystal: 4, midnight_salt: 10 } },
+    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 100000, collectCooldownMs: 48 * 60 * 60 * 1000, materialRequirements: { frost_berry: 10, vampire_fang: 5, werewolf_claw: 5, spectral_thread: 8 } },
+    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 75000, collectCooldownMs: 36 * 60 * 60 * 1000, materialRequirements: { ancient_rune: 6, obsidian_fragment: 8, phantom_glass: 5, thorny_root: 8 } },
+    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 50000, collectCooldownMs: 24 * 60 * 60 * 1000, materialRequirements: { cursed_coin: 12, crystal_shard: 8, witch_brew: 5, blood_vial: 5 } },
+    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 30000, collectCooldownMs: 18 * 60 * 60 * 1000, materialRequirements: { ember_core: 5, shadow_cloth: 3, black_feather: 8, ectoplasm: 6 } },
+    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 15000, collectCooldownMs: 12 * 60 * 60 * 1000, materialRequirements: { ghost_essence: 8, bat_wing: 5, moon_dust: 5, silver_dust: 4 } },
+    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 5000, collectCooldownMs: 8 * 60 * 60 * 1000, materialRequirements: { ash: 10, cobweb_thread: 5, pumpkin_seed: 8 } },
   ],
-  EVENT_COLLECT_REWARD_CAP: 300000,
+  EVENT_COLLECT_REWARD_CAP: 369000,
   // Horas en UTC a propósito: así el evento empieza/termina igual sin importar
   // en qué zona horaria esté el servidor donde corra el bot (ej. Render = UTC).
   EVENT_START: new Date('2026-10-03T00:00:00Z'),

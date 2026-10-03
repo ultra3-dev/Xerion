@@ -13,3 +13,7 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

@@ -6,6 +6,8 @@ const path = require('path');
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = process.env.ECONOMY_DATA_FILE || path.join(DATA_DIR, 'economy.json');
 const PG_TABLE = 'public.xerion_economy_users';
+const PG_CODES_TABLE = 'public.xerion_redeem_codes';
+const PG_REDEMPTIONS_TABLE = 'public.xerion_redeem_code_redemptions';
 
 let db = { users: {} };
 let dirty = false;
@@ -13,9 +15,11 @@ let dirtyAll = false;
 let postgresPool = null;
 let postgresEnabled = false;
 let saveInProgress = null;
+let resetInProgress = false;
 const dirtyUserIds = new Set();
 const persistedSnapshots = new Map();
 const userIds = new WeakMap();
+let activeRedemptions = 0;
 
 // ---------- Persistencia ----------
 
@@ -51,9 +55,11 @@ function readLocalDB() {
     db = JSON.parse(raw);
     if (!db || typeof db !== 'object' || Array.isArray(db)) db = { users: {} };
     if (!db.users || typeof db.users !== 'object' || Array.isArray(db.users)) db.users = {};
+    if (!db.redeemCodes || typeof db.redeemCodes !== 'object' || Array.isArray(db.redeemCodes)) db.redeemCodes = {};
+    if (!db.redeemCodeClaims || typeof db.redeemCodeClaims !== 'object' || Array.isArray(db.redeemCodeClaims)) db.redeemCodeClaims = {};
   } catch (err) {
     console.error('[DB] No se pudo leer economy.json, se inicia una base vacía:', err);
-    db = { users: {} };
+    db = { users: {}, redeemCodes: {}, redeemCodeClaims: {} };
   }
   dirty = false;
   for (const [id, user] of Object.entries(db.users)) {
@@ -145,6 +151,7 @@ async function savePostgresDB() {
 }
 
 async function saveDB() {
+  if (resetInProgress) return true;
   if (postgresEnabled) return savePostgresDB();
   return saveLocalDB();
 }
@@ -173,8 +180,26 @@ async function loadDB() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
     );
+    await postgresPool.query(
+      `CREATE TABLE IF NOT EXISTS ${PG_CODES_TABLE} (
+        code_key TEXT PRIMARY KEY,
+        code_text TEXT NOT NULL,
+        reward BIGINT NOT NULL CHECK (reward > 0),
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    );
+    await postgresPool.query(
+      `CREATE TABLE IF NOT EXISTS ${PG_REDEMPTIONS_TABLE} (
+        code_key TEXT NOT NULL REFERENCES ${PG_CODES_TABLE}(code_key) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        redeemed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (code_key, user_id)
+      )`,
+    );
     const result = await postgresPool.query(`SELECT user_id, user_data FROM ${PG_TABLE}`);
-    db = { users: {} };
+    db = { users: {}, redeemCodes: {}, redeemCodeClaims: {} };
     dirty = false;
     dirtyAll = false;
     dirtyUserIds.clear();
@@ -267,6 +292,9 @@ function defaultUser() {
     class: null,
     classChangedAt: 0,
     eventRolesPurchased: [],
+    materials: {},
+    activeQuest: null,
+    questHistory: [],
     xp: 0,
     weapons: [],
     equippedWeapon: null,
@@ -289,11 +317,19 @@ function ensureShape(user) {
   if (!user.cooldowns || typeof user.cooldowns !== 'object' || Array.isArray(user.cooldowns)) user.cooldowns = {};
   if (!user.cooldownCycles || typeof user.cooldownCycles !== 'object' || Array.isArray(user.cooldownCycles)) user.cooldownCycles = {};
   if (!user.inventory || typeof user.inventory !== 'object' || Array.isArray(user.inventory)) user.inventory = {};
+  if (!user.materials || typeof user.materials !== 'object' || Array.isArray(user.materials)) user.materials = {};
+  for (const [id, quantity] of Object.entries(user.materials)) {
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) delete user.materials[id];
+  }
   if (!user.effects || typeof user.effects !== 'object' || Array.isArray(user.effects)) user.effects = {};
   if (user.class === undefined) user.class = null;
   if (typeof user.classChangedAt !== 'number') user.classChangedAt = 0;
   if (typeof user.xp !== 'number') user.xp = 0;
   if (!Array.isArray(user.eventRolesPurchased)) user.eventRolesPurchased = [];
+  if (!Array.isArray(user.questHistory)) user.questHistory = [];
+  if (user.activeQuest !== null && (!user.activeQuest || typeof user.activeQuest !== 'object' || Array.isArray(user.activeQuest))) {
+    user.activeQuest = null;
+  }
   if (!Array.isArray(user.weapons)) user.weapons = [];
   if (user.equippedWeapon === undefined) user.equippedWeapon = null;
   if (typeof user.bountyOn !== 'number') user.bountyOn = 0;
@@ -493,6 +529,231 @@ function removeInventory(user, potionId, qty = 1) {
   return true;
 }
 
+function addMaterial(user, materialId, qty = 1) {
+  const quantity = Math.floor(Number(qty));
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return false;
+  if (!user.materials || typeof user.materials !== 'object') user.materials = {};
+  const current = user.materials[materialId] || 0;
+  if (!Number.isSafeInteger(current + quantity)) return false;
+  user.materials[materialId] = current + quantity;
+  markDirty(user);
+  return true;
+}
+
+function removeMaterial(user, materialId, qty = 1) {
+  const quantity = Math.floor(Number(qty));
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || !user.materials || user.materials[materialId] < quantity) {
+    return false;
+  }
+  user.materials[materialId] -= quantity;
+  if (user.materials[materialId] <= 0) delete user.materials[materialId];
+  markDirty(user);
+  return true;
+}
+
+function normalizeRedeemCode(code) {
+  return String(code || '').trim().toUpperCase();
+}
+
+async function createRedeemCode(code, reward, expiresAt, createdBy) {
+  const key = normalizeRedeemCode(code);
+  const expiration = new Date(expiresAt);
+  if (!/^[A-Z0-9_-]{3,32}$/.test(key)
+    || !Number.isSafeInteger(reward) || reward < 1
+    || !Number.isFinite(expiration.getTime()) || expiration.getTime() <= Date.now()) {
+    return { error: 'invalid' };
+  }
+  const record = {
+    code: key,
+    reward,
+    expiresAt: expiration.toISOString(),
+    createdBy: String(createdBy),
+    createdAt: new Date().toISOString(),
+  };
+  if (postgresPool) {
+    try {
+      await postgresPool.query(
+        `INSERT INTO ${PG_CODES_TABLE} (code_key, code_text, reward, expires_at, created_by)
+         VALUES ($1, $1, $2, $3, $4)`,
+        [key, reward, expiration, record.createdBy],
+      );
+    } catch (err) {
+      if (err.code === '23505') return { error: 'exists' };
+      throw err;
+    }
+    return { code: record };
+  }
+  if (db.redeemCodes[key]) return { error: 'exists' };
+  db.redeemCodes[key] = record;
+  markDirty();
+  await saveLocalDB();
+  return { code: record };
+}
+
+async function listRedeemCodes() {
+  if (postgresPool) {
+    const result = await postgresPool.query(
+      `SELECT c.code_text AS code, c.reward, c.expires_at AS "expiresAt",
+              c.created_at AS "createdAt", COUNT(r.user_id)::int AS "redeemedCount"
+       FROM ${PG_CODES_TABLE} c
+       LEFT JOIN ${PG_REDEMPTIONS_TABLE} r ON r.code_key = c.code_key
+       GROUP BY c.code_key
+       ORDER BY c.created_at DESC`,
+    );
+    return result.rows.map((row) => ({
+      code: row.code,
+      reward: Number(row.reward),
+      expiresAt: new Date(row.expiresAt).toISOString(),
+      createdAt: new Date(row.createdAt).toISOString(),
+      redeemedCount: row.redeemedCount,
+    }));
+  }
+  return Object.values(db.redeemCodes || {})
+    .map((entry) => ({
+      ...entry,
+      redeemedCount: Object.keys((db.redeemCodeClaims || {})[entry.code] || {}).length,
+    }))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+async function deleteRedeemCode(code) {
+  const key = normalizeRedeemCode(code);
+  if (postgresPool) {
+    const result = await postgresPool.query(`DELETE FROM ${PG_CODES_TABLE} WHERE code_key = $1`, [key]);
+    return result.rowCount > 0;
+  }
+  if (!db.redeemCodes || !db.redeemCodes[key]) return false;
+  delete db.redeemCodes[key];
+  if (db.redeemCodeClaims) delete db.redeemCodeClaims[key];
+  markDirty();
+  await saveLocalDB();
+  return true;
+}
+
+async function redeemCode(userId, code) {
+  activeRedemptions += 1;
+  try {
+    return await redeemCodeUnlocked(userId, code);
+  } finally {
+    activeRedemptions -= 1;
+  }
+}
+
+async function redeemCodeUnlocked(userId, code) {
+  const key = normalizeRedeemCode(code);
+  const cachedUser = getUser(String(userId));
+  if (getLevel(cachedUser.xp) < 10) return { error: 'level_required', level: getLevel(cachedUser.xp) };
+
+  if (!postgresPool) {
+    const record = (db.redeemCodes || {})[key];
+    if (!record) return { error: 'notfound' };
+    if (new Date(record.expiresAt).getTime() <= Date.now()) return { error: 'expired' };
+    if (!db.redeemCodeClaims) db.redeemCodeClaims = {};
+    if (!db.redeemCodeClaims[key]) db.redeemCodeClaims[key] = {};
+    if (db.redeemCodeClaims[key][userId]) return { error: 'used' };
+    if (!Number.isSafeInteger(cachedUser.cash + record.reward)) return { error: 'balance_overflow' };
+    cachedUser.cash += record.reward;
+    db.redeemCodeClaims[key][userId] = new Date().toISOString();
+    markDirty(cachedUser);
+    await saveLocalDB();
+    return { code: record.code, reward: record.reward, cash: cachedUser.cash };
+  }
+
+  if (!await saveDB()) return { error: 'storage_error' };
+  const client = await postgresPool.connect();
+  try {
+    await client.query('BEGIN');
+    const codeResult = await client.query(
+      `SELECT code_text, reward, expires_at FROM ${PG_CODES_TABLE} WHERE code_key = $1 FOR UPDATE`,
+      [key],
+    );
+    if (!codeResult.rowCount) {
+      await client.query('ROLLBACK');
+      return { error: 'notfound' };
+    }
+    const record = codeResult.rows[0];
+    if (new Date(record.expires_at).getTime() <= Date.now()) {
+      await client.query('ROLLBACK');
+      return { error: 'expired' };
+    }
+    const claim = await client.query(
+      `INSERT INTO ${PG_REDEMPTIONS_TABLE} (code_key, user_id)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING user_id`,
+      [key, String(userId)],
+    );
+    if (!claim.rowCount) {
+      await client.query('ROLLBACK');
+      return { error: 'used' };
+    }
+    const reward = Number(record.reward);
+    if (!Number.isSafeInteger(cachedUser.cash + reward)) {
+      await client.query('ROLLBACK');
+      return { error: 'balance_overflow' };
+    }
+    const updatedUser = { ...cachedUser, cash: cachedUser.cash + reward };
+    const snapshot = JSON.stringify(updatedUser);
+    await client.query(
+      `INSERT INTO ${PG_TABLE} (user_id, user_data, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET user_data = EXCLUDED.user_data, updated_at = NOW()`,
+      [String(userId), snapshot],
+    );
+    await client.query('COMMIT');
+    Object.assign(cachedUser, updatedUser);
+    persistedSnapshots.set(String(userId), JSON.stringify(cachedUser));
+    dirtyUserIds.delete(String(userId));
+    dirty = dirtyAll || dirtyUserIds.size > 0;
+    return { code: record.code_text, reward, cash: cachedUser.cash };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function resetAllProgress() {
+  while (activeRedemptions > 0) await new Promise((resolve) => setTimeout(resolve, 10));
+  resetInProgress = true;
+  try {
+    if (saveInProgress) await saveInProgress;
+    const usersReset = Object.keys(db.users || {}).length;
+    if (postgresPool) {
+      const client = await postgresPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`DELETE FROM ${PG_REDEMPTIONS_TABLE}`);
+        await client.query(`DELETE FROM ${PG_TABLE}`);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+    db.users = {};
+    db.redeemCodeClaims = {};
+    persistedSnapshots.clear();
+    dirtyUserIds.clear();
+    dirty = false;
+    dirtyAll = false;
+    if (!postgresPool) {
+      dirty = true;
+      dirtyAll = true;
+      resetInProgress = false;
+      await saveLocalDB();
+    }
+    return { usersReset };
+  } finally {
+    resetInProgress = false;
+  }
+}
+
+function hasActiveRedemptions() {
+  return activeRedemptions > 0;
+}
+
 // ---------- Armas (permanentes, no se consumen) ----------
 
 function hasWeapon(user, weaponId) {
@@ -514,5 +775,8 @@ module.exports = {
   isOnCooldown, getCooldownRemaining, setCooldown,
   consumeCooldownUse,
   addInventory, removeInventory,
+  addMaterial, removeMaterial,
   hasWeapon, addWeapon,
+  createRedeemCode, listRedeemCodes, deleteRedeemCode, redeemCode, resetAllProgress,
+  hasActiveRedemptions,
 };

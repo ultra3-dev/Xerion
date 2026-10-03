@@ -170,7 +170,7 @@ function profileCard(cfg, member, dbUser, rank, activePotionLines) {
 function classListContainer(cfg, dbUser) {
   const c = container(cfg.COLORS.PURPLE || cfg.COLORS.DEBT);
   c.addTextDisplayComponents(text('# 🎭 Clases de Halloween'));
-  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con \`${cfg.PREFIX} class <id>\` · elección permanente`));
+  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con \`${cfg.PREFIX} class <id|nombre>\` · elección permanente`));
   c.addSeparatorComponents(sep());
   const lines = cfg.CLASSES.map((cl) => `${cl.emoji} **${cl.name}** \`(${cl.id})\`\n${cl.desc}`);
   c.addTextDisplayComponents(text(lines.join('\n\n')));
@@ -189,17 +189,30 @@ function classListContainer(cfg, dbUser) {
 function armoryContainer(cfg, dbUser, invokerId) {
   const c = container(cfg.COLORS.DARK);
   c.addTextDisplayComponents(text('# ⚔️ Armería Embrujada'));
-  c.addTextDisplayComponents(text(`-# Compra con el botón · equipa con \`${cfg.PREFIX} equip <id>\` (permanente, un arma a la vez)`));
+  const equipped = cfg.WEAPONS.find((weapon) => weapon.id === dbUser.equippedWeapon);
+  c.addTextDisplayComponents(text(
+    `**Cash:** ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI} · **Deuda:** ${db.fmt(dbUser.debt)}${cfg.CANDY_EMOJI}\n`
+    + `**Equipada:** ${equipped ? `${equipped.emoji} ${equipped.name}` : 'ninguna'}\n`
+    + `-# Compra con el botón y equipa con \`${cfg.PREFIX} equip <id>\`. Solo el arma equipada aplica su bonus; las armas compradas son permanentes.`,
+  ));
   c.addSeparatorComponents(sep());
   cfg.WEAPONS.forEach((w, i) => {
     const owned = db.hasWeapon(dbUser, w.id);
     const equipped = dbUser.equippedWeapon === w.id;
     const tag = equipped ? ' `equipada`' : (owned ? ' `en tu poder`' : '');
+    const unavailable = dbUser.debt > 0 || dbUser.cash < w.price;
+    const buttonLabel = owned
+      ? 'Comprada'
+      : dbUser.debt > 0
+        ? 'Paga tu deuda'
+        : dbUser.cash < w.price
+          ? `Faltan ${db.fmt(w.price - dbUser.cash)}`
+          : 'Comprar';
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(`${w.emoji} **${w.name}**${tag}\n${w.desc}\n💰 **${db.fmt(w.price)}**${cfg.CANDY_EMOJI}`))
       .setButtonAccessory(
-        lockedButton('shopbuy', w.id, invokerId, owned ? 'Comprada' : 'Comprar', owned ? ButtonStyle.Secondary : ButtonStyle.Success, owned ? '✅' : '🛒')
-          .setDisabled(owned),
+        lockedButton('shopbuy', w.id, invokerId, buttonLabel, owned ? ButtonStyle.Secondary : ButtonStyle.Success, owned ? '✅' : '🛒')
+          .setDisabled(owned || unavailable),
       );
     c.addSectionComponents(section);
     if (i < cfg.WEAPONS.length - 1) c.addSeparatorComponents(sep());
@@ -274,7 +287,23 @@ function duelResultCard(cfg, challengerMember, targetMember, result) {
   const loser = result.challengerWins ? targetMember : challengerMember;
   c.addTextDisplayComponents(text(
     `🏆 **${winner.displayName}** gana el duelo: **+${db.fmt(result.pot - result.bet)}**${cfg.CANDY_EMOJI}\n`
-    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}`,
+    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}\n`
+    + `${result.narrative || ''}`
+    + (result.materialDrop ? `\n${result.materialDrop.material.emoji} Material encontrado: **${result.materialDrop.material.name} x${result.materialDrop.quantity}**.` : ''),
+  ));
+  return payload(c);
+}
+
+function duelAnimationCard(cfg, challengerMember, targetMember, frame) {
+  const icons = ['⚔️', '💥', '✨'];
+  const captions = ['Los combatientes se preparan…', '¡Cruzan sus armas!', 'El golpe decisivo…'];
+  const c = container(cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text(`# ${icons[frame % icons.length]} Duelo en curso`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `**${challengerMember.displayName}**  ⚔️  **${targetMember.displayName}**\n\n`
+    + `${captions[frame % captions.length]}\n`
+    + `\`${'▰'.repeat(frame + 1)}${'▱'.repeat(3 - frame)}\``,
   ));
   return payload(c);
 }
@@ -341,7 +370,11 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(
         `**${i + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya lo tienes, falta activarlo' : ''}\n`
-        + `💰 **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada 24 h`,
+        + `💰 **${db.fmt(Math.ceil(r.price / 2))}**${cfg.CANDY_EMOJI} para activar (mitad del precio) · 🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada ${db.formatDuration(r.collectCooldownMs)}\n`
+        + `🧰 Materiales: ${Object.entries(r.materialRequirements || {}).map(([id, qty]) => {
+          const material = cfg.MATERIALS.find((entry) => entry.id === id);
+          return `${material ? material.emoji : '•'} ${material ? material.name : id} ×${qty}`;
+        }).join(' · ')}`,
       ))
       .setButtonAccessory(
         lockedButton('shopbuy', r.id, invokerId, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : '🛒')
@@ -366,6 +399,11 @@ function inventoryContainer(cfg, member, dbUser) {
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text(`# 🎒 Inventario de ${member.displayName}`));
   c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `💰 Cash: **${db.fmt(dbUser.cash || 0)}**${cfg.CANDY_EMOJI} · 🏦 Bank: **${db.fmt(dbUser.bank || 0)}**${cfg.CANDY_EMOJI}\n`
+    + `💀 Debt: **${db.fmt(dbUser.debt || 0)}**${cfg.CANDY_EMOJI} · ⭐ Nivel: **${db.getLevel(dbUser.xp || 0)}**`,
+  ));
+  c.addSeparatorComponents(sep());
   const owned = Object.entries(dbUser.inventory || {}).filter(([, qty]) => qty > 0);
   if (!owned.length) {
     c.addTextDisplayComponents(text('No tienes pociones guardadas. Consíguelas con `xn shop`.'));
@@ -376,6 +414,17 @@ function inventoryContainer(cfg, member, dbUser) {
       return `${p.emoji} **${p.name}** \`x${qty}\` — usa \`xn use ${p.id}\``;
     }).filter(Boolean);
     c.addTextDisplayComponents(text(lines.join('\n') || 'No tienes pociones guardadas.'));
+  }
+  const materialEntries = Object.entries(dbUser.materials || {}).filter(([, qty]) => qty > 0);
+  c.addSeparatorComponents(sep());
+  if (!materialEntries.length) {
+    c.addTextDisplayComponents(text('**🧰 Materiales**\nNo tienes materiales todavía.'));
+  } else {
+    const materialLines = materialEntries.map(([id, qty]) => {
+      const material = cfg.MATERIALS.find((entry) => entry.id === id);
+      return `${material ? material.emoji : '•'} **${material ? material.name : id}** \`x${qty}\``;
+    });
+    c.addTextDisplayComponents(text(`**🧰 Materiales (${materialEntries.length})**\n${materialLines.join('\n')}`));
   }
   c.addSeparatorComponents(sep());
   const activeLines = [];
@@ -396,6 +445,12 @@ function inventoryContainer(cfg, member, dbUser) {
     }).filter(Boolean);
     c.addTextDisplayComponents(text(`**⚔️ Armas**\n${wLines.join('\n')}`));
   }
+  const purchasedRoles = new Set(dbUser.eventRolesPurchased || []);
+  const roles = cfg.EVENT_SHOP.filter((role) => purchasedRoles.has(role.roleId));
+  if (roles.length) {
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(`**🎃 Beneficios de evento activados**\n${roles.map((role) => `<@&${role.roleId}>`).join('\n')}`));
+  }
   return payload(c);
 }
 
@@ -404,6 +459,10 @@ function inventoryContainer(cfg, member, dbUser) {
 function potionsInfoContainer(cfg) {
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text('# 📖 Guía de Pociones'));
+  c.addTextDisplayComponents(text(
+    `Compra con \`${cfg.PREFIX} buy <id> [cantidad]\` y activa una carga con \`${cfg.PREFIX} use <id>\`.\n`
+    + 'Cada activación consume una poción; los efectos acumulables respetan el máximo de cargas que aparece abajo. Revisa `inventory` para ver tus existencias y efectos activos.',
+  ));
   c.addSeparatorComponents(sep());
   for (const p of cfg.POTIONS) {
     c.addTextDisplayComponents(text(
@@ -459,7 +518,9 @@ function cooldownsContainer(cfg, member, lines) {
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text(`# ⏱️ Cooldowns de ${member.displayName}`));
   c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(lines.join('\n')));
+  c.addTextDisplayComponents(text(
+    `${lines.join('\n')}\n\n-# Collect usa el cooldown del mejor rol que hayas comprado; los ingresos de varios roles no se acumulan.`,
+  ));
   return payload(c);
 }
 
@@ -690,13 +751,13 @@ const HELP_CATEGORIES = {
       + '`deposit` (`dep`) `<cant|all>` — Guardar Candys en el banco\n'
       + '`withdraw` (`with`) `<cant|all>` — Sacar del banco (comisión hasta 10%)\n'
       + '`pay <@user> <cant|all>` — Enviar Candys a alguien\n'
-      + '`debt` — Ver el detalle de tu deuda\n'
+      + '`debt [usuario]` — Ver tu deuda o la de otra persona\n'
       + '`paydebt` (`pd`) `[cant]` — Pagarle a la bruja\n'
       + '`bounty` (`bnt`) `<@user> <cant>` — Poner precio a su cabeza\n'
       + '`leaderboard` (`top`) — Top 100 con botones: página y ricos/endeudados\n'
       + '`serverstats` (`stats`) — Estadísticas del servidor\n'
       + '`cooldowns` (`cd`) — Tus tiempos de espera\n'
-      + '`inventory` (`inv`) `[usuario]` — Pociones, efectos y armas',
+      + '`inventory` (`inv`) `[usuario]` — Saldos, deuda, pociones, materiales, efectos, armas y roles',
   },
   ganancia: {
     label: '💼 Ganancia', emoji: '💼',
@@ -708,19 +769,21 @@ const HELP_CATEGORIES = {
       + '`harvest` — Cosechar Candys\n'
       + '`candyraid` (`raid`) — Salir de cabalgata de dulces con riesgo\n'
       + '`daily` — Recompensa diaria (¡bono especial el último día del evento!)\n'
-      + '`collect` — Reclamar cada 24 h el ingreso del mejor rol comprado del evento\n'
+      + '`collect` — Reclamar el ingreso del mejor rol comprado (cooldown según el rol)\n'
       + '`trickortreat` (`tot`) — Dulce o truco diario\n'
       + '`rob <@user>` — Intentar robar Candys en efectivo',
   },
   rpg: {
     label: '🐺 RPG', emoji: '🐺',
     text:
-      '`class [id]` — Elegir clase permanente al nivel 5\n'
+      '`class [id|nombre]` — Elegir clase permanente al nivel 5\n'
       + '`hunt` — Cazar una criatura de Halloween\n'
       + '`duel <@user> <cant>` — Retar a un duelo por Candys\n'
       + '`dungeon` (`dg`) — Explorar una mazmorra embrujada\n'
       + '`boss` — Enfrentar a La Calabaza Ancestral\n'
-      + '`quest` — Misión de la Bruja\n'
+      + '`quest` — Recibir o revisar una misión\n'
+      + '`quest claim` — Reclamar la recompensa al completarla\n'
+      + '`redeem-code <código>` (`rc`) — Canjear desde nivel 10\n'
       + '`level` — Ver tu nivel y experiencia\n'
       + '`achievements` (`ach`) — Ver tus logros\n'
       + '`armory` (`arm`) — Tienda de armas\n'
@@ -758,10 +821,12 @@ const HELP_CATEGORIES = {
       + '`addcandy` (`add`) `<@user> <cant>` — Dar Candys\n'
       + '`removecandy` (`rm`) `<@user> <cant>` — Quitar Candys\n'
       + '`setdebt` (`sd`) `<@user> <cant>` — Fijar deuda exacta\n'
-      + '`givepotion` (`give`) `<@user> <id> [cant]` — Regalar una poción\n'
       + '`resetuser` (`reset`) `<@user>` — Reiniciar el perfil (con confirmación)',
   },
 };
+
+// Clarify current RPG/casino flows.
+HELP_CATEGORIES.casino.text += '\n-# Apuestas sin tope fijo; el límite es tu Cash.';
 
 function helpContainer(cfg, categoryKey, invokerId) {
   const key = HELP_CATEGORIES[categoryKey] ? categoryKey : 'economia';
@@ -792,7 +857,7 @@ module.exports = {
   successCard, errorCard, infoCard, debtCard,
   balanceCard, profileCard,
   classListContainer, armoryContainer, levelCard, achievementsContainer,
-  duelChallengeCard, duelResultCard,
+  duelChallengeCard, duelResultCard, duelAnimationCard,
   shopContainer, eventShopContainer, inventoryContainer, potionsInfoContainer,
   privateShopPrompt,
   leaderboardContainer, cooldownsContainer, serverStatsContainer,

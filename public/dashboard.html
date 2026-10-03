@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Xerion · Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101114;
+      --panel: #191a1f;
+      --panel-2: #202127;
+      --text: #f4f1ed;
+      --muted: #a6a3a0;
+      --line: #34353c;
+      --orange: #ff8b35;
+      --orange-dark: #592a12;
+      --red: #f87171;
+      --green: #62d69c;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(ellipse at 50% -20%, #382114 0, transparent 45%), var(--bg);
+      color: var(--text);
+    }
+    button, input { font: inherit; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      background: var(--orange);
+      color: #20140d;
+      font-weight: 750;
+      padding: 11px 16px;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: .55; cursor: wait; }
+    button.secondary { color: var(--text); background: #34353c; }
+    button.danger { color: #fff; background: #9c2d2d; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #111216;
+      color: var(--text);
+      padding: 11px 12px;
+      outline: none;
+    }
+    input:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #ff8b3526; }
+    label { display: grid; gap: 7px; color: #e8e2dc; font-size: .92rem; font-weight: 650; }
+    .shell { max-width: 1040px; margin: 0 auto; padding: 44px 22px 80px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 30px; }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .mark { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: #422819; font-size: 24px; }
+    h1 { font-size: clamp(1.55rem, 3vw, 2rem); margin: 0; letter-spacing: -.04em; }
+    .sub { color: var(--muted); margin: 4px 0 0; font-size: .92rem; }
+    .panel { background: linear-gradient(145deg, #1b1c22, #16171b); border: 1px solid var(--line); border-radius: 16px; padding: 24px; box-shadow: 0 20px 60px #0004; }
+    .login { max-width: 440px; margin: 8vh auto 0; }
+    .login h2, .section-heading h2 { margin: 0; font-size: 1.2rem; letter-spacing: -.02em; }
+    .stack { display: grid; gap: 17px; margin-top: 23px; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .layout { display: grid; gap: 20px; }
+    .section-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 18px; }
+    .section-heading p { color: var(--muted); margin: 6px 0 0; font-size: .92rem; line-height: 1.5; }
+    .form-grid { display: grid; grid-template-columns: 1.1fr .8fr 1fr auto; align-items: end; gap: 12px; }
+    .table-wrap { overflow-x: auto; margin-top: 18px; }
+    table { width: 100%; min-width: 690px; border-collapse: collapse; text-align: left; }
+    th { color: var(--muted); font-size: .77rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+    th, td { padding: 13px 11px; border-bottom: 1px solid var(--line); }
+    td { font-size: .91rem; }
+    .code { color: #ffd1a8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 750; letter-spacing: .06em; }
+    .muted { color: var(--muted); }
+    .notice { min-height: 20px; margin: 0; color: var(--muted); font-size: .9rem; }
+    .notice.error { color: var(--red); }
+    .notice.success { color: var(--green); }
+    .warning { border-color: #74402b; background: linear-gradient(145deg, #271c17, #1b1715); }
+    .warning-copy { color: #e3d4ca; line-height: 1.55; max-width: 760px; }
+    .warning-copy strong { color: #fff; }
+    .reset-controls { display: grid; grid-template-columns: minmax(160px, 1fr) auto; gap: 12px; align-items: end; margin-top: 18px; }
+    .check { display: flex; align-items: start; gap: 10px; color: #e8e2dc; font-size: .9rem; line-height: 1.4; margin-top: 15px; }
+    .check input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--orange); flex: 0 0 auto; }
+    .hidden { display: none !important; }
+    .pill { padding: 5px 8px; border-radius: 999px; background: #302b27; color: #ffc18f; font-size: .78rem; white-space: nowrap; }
+    .empty { color: var(--muted); text-align: center; padding: 26px 10px; }
+    @media (max-width: 740px) {
+      .shell { padding: 28px 14px 52px; }
+      .panel { padding: 18px; }
+      .form-grid { grid-template-columns: 1fr 1fr; }
+      .form-grid button { width: 100%; }
+      .reset-controls { grid-template-columns: 1fr; }
+      .toolbar { align-items: flex-start; }
+    }
+    @media (max-width: 430px) { .form-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark" aria-hidden="true">🎃</div>
+        <div>
+          <h1>Xerion</h1>
+          <p class="sub">Panel de administración</p>
+        </div>
+      </div>
+      <button id="logout" class="secondary hidden" type="button">Cerrar sesión</button>
+    </header>
+
+    <section id="login-panel" class="panel login">
+      <h2>Iniciar sesión</h2>
+      <p class="sub">Acceso privado para administrar códigos de canje y el progreso del bot.</p>
+      <form id="login-form" class="stack">
+        <label for="password">Contraseña del dashboard
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Entrar</button>
+        <p id="login-notice" class="notice" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <div id="dashboard" class="layout hidden">
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Códigos de canje</h2>
+            <p>Los códigos se pueden usar una vez por usuario desde nivel 10. La fecha se interpreta en la zona horaria del navegador.</p>
+          </div>
+          <span class="pill">Nivel mínimo 10</span>
+        </div>
+        <form id="code-form" class="form-grid">
+          <label for="code">Código
+            <input id="code" name="code" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" placeholder="HALLOWEEN2026" required>
+          </label>
+          <label for="reward">Premio en Candys
+            <input id="reward" name="reward" type="number" min="1" step="1" placeholder="5000" required>
+          </label>
+          <label for="expires">Vence
+            <input id="expires" name="expires" type="datetime-local" required>
+          </label>
+          <button type="submit">Crear código</button>
+        </form>
+        <p id="code-notice" class="notice" aria-live="polite" style="margin-top:12px"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Código</th><th>Premio</th><th>Vence</th><th>Canjes</th><th></th></tr></thead>
+            <tbody id="code-list"></tbody>
+          </table>
+          <div id="code-empty" class="empty hidden">Todavía no hay códigos creados.</div>
+        </div>
+      </section>
+
+      <section class="panel warning">
+        <div class="section-heading">
+          <div>
+            <h2>Reinicio global</h2>
+            <p class="warning-copy">Borra el progreso de todas las cuentas: Candys, banco, deuda, inventarios, materiales, clases, roles, misiones, estadísticas y canjes. <strong>La acción no se puede deshacer.</strong> Los códigos configurados se conservan y vuelven a estar disponibles.</p>
+          </div>
+          <span class="pill">Confirmación por DM</span>
+        </div>
+        <button id="request-reset" class="danger" type="button">Solicitar código por DM</button>
+        <p id="reset-notice" class="notice" aria-live="polite" style="margin-top:12px"></p>
+        <form id="reset-form" class="hidden">
+          <div class="reset-controls">
+            <label for="reset-token">Código de 8 dígitos enviado al propietario por Discord
+              <input id="reset-token" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" required>
+            </label>
+            <button id="confirm-reset" class="danger" type="submit">Borrar todo el progreso</button>
+          </div>
+          <label class="check" for="reset-confirm">
+            <input id="reset-confirm" type="checkbox" required>
+            <span>Confirmo que quiero borrar el progreso de todas las cuentas. El código vence en 10 minutos y se puede usar una sola vez.</span>
+          </label>
+        </form>
+      </section>
+    </div>
+  </main>
+  <script>
+    const byId = (id) => document.getElementById(id);
+    const dateInput = byId('expires');
+    const defaultExpiry = new Date(Date.now() + 7 * 86400000);
+    dateInput.value = new Date(defaultExpiry.getTime() - defaultExpiry.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+    function setNotice(element, message, kind) {
+      element.textContent = message || '';
+      element.className = `notice${kind ? ` ${kind}` : ''}`;
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        credentials: 'same-origin',
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(data.error || 'request_failed');
+        error.status = response.status;
+        throw error;
+      }
+      return data;
+    }
+
+    function showDashboard() {
+      byId('login-panel').classList.add('hidden');
+      byId('dashboard').classList.remove('hidden');
+      byId('logout').classList.remove('hidden');
+      loadCodes();
+    }
+
+    function showLogin() {
+      byId('login-panel').classList.remove('hidden');
+      byId('dashboard').classList.add('hidden');
+      byId('logout').classList.add('hidden');
+    }
+
+    function formatDate(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+    }
+
+    async function loadCodes() {
+      const table = byId('code-list');
+      table.replaceChildren();
+      try {
+        const { codes } = await api('/api/dashboard/codes');
+        byId('code-empty').classList.toggle('hidden', codes.length > 0);
+        for (const code of codes) {
+          const row = document.createElement('tr');
+          const values = [code.code, `${Number(code.reward).toLocaleString()} 🍬`, formatDate(code.expiresAt), String(code.redeemedCount)];
+          for (const value of values) {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            if (value === code.code) cell.className = 'code';
+            row.append(cell);
+          }
+          const actionCell = document.createElement('td');
+          const remove = document.createElement('button');
+          remove.className = 'secondary';
+          remove.type = 'button';
+          remove.textContent = 'Eliminar';
+          remove.addEventListener('click', async () => {
+            if (!window.confirm(`¿Eliminar el código ${code.code} y su historial de canjes?`)) return;
+            try {
+              await api(`/api/dashboard/codes/${encodeURIComponent(code.code)}`, { method: 'DELETE' });
+              setNotice(byId('code-notice'), 'Código eliminado.', 'success');
+              await loadCodes();
+            } catch (error) {
+              setNotice(byId('code-notice'), 'No se pudo eliminar el código. Vuelve a iniciar sesión si la sesión venció.', 'error');
+              if (error.status === 401) showLogin();
+            }
+          });
+          actionCell.append(remove);
+          row.append(actionCell);
+          table.append(row);
+        }
+      } catch (error) {
+        setNotice(byId('code-notice'), 'No se pudieron cargar los códigos. Vuelve a iniciar sesión si la sesión venció.', 'error');
+        if (error.status === 401) showLogin();
+      }
+    }
+
+    byId('login-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button[type="submit"]');
+      button.disabled = true;
+      setNotice(byId('login-notice'), 'Comprobando acceso…');
+      try {
+        await api('/api/dashboard/login', {
+          method: 'POST',
+          body: JSON.stringify({ password: byId('password').value }),
+        });
+        byId('password').value = '';
+        setNotice(byId('login-notice'), '');
+        showDashboard();
+      } catch (error) {
+        const message = error.status === 503
+          ? 'El dashboard aún no está configurado en el servicio.'
+          : error.status === 429
+            ? 'Demasiados intentos. Espera 15 minutos.'
+            : 'No se pudo iniciar sesión. Revisa la contraseña e inténtalo de nuevo.';
+        setNotice(byId('login-notice'), message, 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    byId('logout').addEventListener('click', async () => {
+      await api('/api/dashboard/logout', { method: 'POST', body: '{}' }).catch(() => {});
+      showLogin();
+    });
+
+    byId('code-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        await api('/api/dashboard/codes', {
+          method: 'POST',
+          body: JSON.stringify({
+            code: byId('code').value.trim(),
+            reward: Number(byId('reward').value),
+            expiresAt: new Date(byId('expires').value).toISOString(),
+          }),
+        });
+        byId('code').value = '';
+        byId('reward').value = '';
+        setNotice(byId('code-notice'), 'Código creado.', 'success');
+        await loadCodes();
+      } catch (error) {
+        const message = error.error === 'code_exists'
+          ? 'Ese código ya existe.'
+          : error.error === 'invalid_code'
+            ? 'Revisa el código, el premio y la fecha de vencimiento.'
+            : 'No se pudo crear el código. Vuelve a iniciar sesión si la sesión venció.';
+        setNotice(byId('code-notice'), message, 'error');
+        if (error.status === 401) showLogin();
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    byId('request-reset').addEventListener('click', async () => {
+      const button = byId('request-reset');
+      button.disabled = true;
+      setNotice(byId('reset-notice'), 'Enviando el código por mensaje privado…');
+      try {
+        const result = await api('/api/dashboard/reset/request', { method: 'POST', body: '{}' });
+        byId('reset-form').classList.remove('hidden');
+        byId('reset-token').focus();
+        setNotice(byId('reset-notice'), `Código enviado al DM del propietario. Vence en ${Math.floor(result.expiresInSeconds / 60)} minutos.`, 'success');
+      } catch (error) {
+        const message = error.error === 'dm_failed'
+          ? 'No pude enviar el DM. Habilita los mensajes privados y vuelve a solicitarlo.'
+          : 'No se pudo solicitar el código. Vuelve a iniciar sesión si la sesión venció.';
+        setNotice(byId('reset-notice'), message, 'error');
+        if (error.status === 401) showLogin();
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    byId('reset-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!byId('reset-confirm').checked) return;
+      if (!window.confirm('Esta acción borrará el progreso de todas las cuentas. ¿Continuar?')) return;
+      const button = byId('confirm-reset');
+      button.disabled = true;
+      try {
+        const result = await api('/api/dashboard/reset/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ token: byId('reset-token').value }),
+        });
+        byId('reset-form').classList.add('hidden');
+        byId('reset-token').value = '';
+        byId('reset-confirm').checked = false;
+        setNotice(byId('reset-notice'), `Reinicio completado. Perfiles borrados: ${result.usersReset}.`, 'success');
+        await loadCodes();
+      } catch (error) {
+        const message = error.error === 'invalid_reset_token'
+          ? 'El código es incorrecto o venció. Solicita uno nuevo.'
+          : 'No se pudo completar el reinicio. Solicita un código nuevo e inténtalo de nuevo.';
+        setNotice(byId('reset-notice'), message, 'error');
+        if (error.status === 401) showLogin();
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    api('/api/dashboard/me').then(showDashboard).catch(() => showLogin());
+  </script>
+</body>
+</html>
