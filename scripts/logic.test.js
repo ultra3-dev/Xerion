@@ -521,7 +521,7 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('global leaderboard uses Discord user syntax without sending any pings', () => {
+test('global leaderboard prints names literally without Discord mentions or pings', () => {
   const guildMemberId = '123456789012345678';
   const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
@@ -530,57 +530,41 @@ test('global leaderboard uses Discord user syntax without sending any pings', ()
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, new RegExp(`<@${guildMemberId}>`));
-  assert.match(rendered, new RegExp(`<@${globalUserId}>`));
+  assert.match(rendered, /@Guild Nick/);
+  assert.match(rendered, /@Global Name/);
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, /Unknown-user/i);
+  assert.doesNotMatch(rendered, /<@!?[0-9]{17,20}>/);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });
 
-test('leaderboard resolves current-page members and global users before using a neutral fallback', async () => {
+test('leaderboard resolves visible names from cache and storage without REST requests', () => {
   const memberId = '123456789012345678';
   const globalId = '234567890123456789';
-  const laterPageId = '345678901234567890';
-  const memberLookups = [];
-  const userLookups = [];
-  const resolved = await resolveLeaderboardEntries([
+  const savedId = '345678901234567890';
+  const laterPageId = '456789012345678901';
+  let savedNameCalls = 0;
+  const entries = [
     { id: memberId, value: 500 },
     { id: globalId, value: 300 },
+    { id: savedId, value: 200 },
     { id: laterPageId, value: 100 },
-  ], {
-    guild: {
-      members: {
-        cache: new Map(),
-        async fetch(id) {
-          memberLookups.push(id);
-          if (id === memberId) return { displayName: 'Guild Nick' };
-          throw new Error('Not a member of this guild');
-        },
-      },
-    },
-    users: {
-      cache: new Map(),
-      async fetch(id) {
-        userLookups.push(id);
-        if (id === globalId) return { globalName: 'Global Name', username: 'global_user' };
-        throw new Error('User unavailable');
-      },
-    },
+  ];
+  const resolved = resolveLeaderboardEntries(entries, {
+    guild: { members: { cache: new Map([[memberId, { displayName: 'Guild Nick' }]]), fetch: () => assert.fail('must not fetch guild members') } },
+    users: { cache: new Map([[globalId, { globalName: 'Global Name' }]]), fetch: () => assert.fail('must not fetch Discord users') },
     page: 0,
-    pageSize: 2,
-    getSavedName: () => '',
+    pageSize: 3,
+    getSavedName: (id) => { savedNameCalls += 1; return id === savedId ? 'Saved Name' : ''; },
   });
-
   assert.equal(resolved[0].displayName, 'Guild Nick');
   assert.equal(resolved[0].isGuildMember, true);
   assert.equal(resolved[1].displayName, 'Global Name');
   assert.equal(resolved[1].isGuildMember, false);
-  assert.equal(resolved[2].displayName, 'Jugador sin nombre');
-  assert.deepEqual(memberLookups, [memberId, globalId]);
-  assert.deepEqual(userLookups, [globalId]);
+  assert.equal(resolved[2].displayName, 'Saved Name');
+  assert.deepEqual(resolved[3], entries[3]);
+  assert.equal(savedNameCalls, 3);
 });
-
 test('Discord message and interaction IDs are processed at most once per process', async () => {
   const eventId = '1430000000000000000';
   assert.equal(await db.claimDiscordEvent('message', eventId), true);
@@ -589,14 +573,17 @@ test('Discord message and interaction IDs are processed at most once per process
   assert.equal(await db.claimDiscordEvent('interaction', eventId), false);
 });
 
-test('duel acceptance acknowledges before fetching the other member', () => {
+test('component interactions acknowledge before database and network work', () => {
   const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  const acceptStart = indexSource.indexOf("if (action === 'accept') {", indexSource.indexOf("if (ns === 'duel')"));
-  const acceptEnd = indexSource.indexOf('\n      }\n    }', acceptStart);
-  assert.ok(acceptStart >= 0 && acceptEnd > acceptStart);
-  const acceptHandler = indexSource.slice(acceptStart, acceptEnd);
-  const acknowledgeAt = acceptHandler.indexOf('await interaction.deferUpdate();');
-  const fetchAt = acceptHandler.indexOf('await interaction.guild.members.fetch');
-  assert.ok(acknowledgeAt >= 0 && fetchAt > acknowledgeAt);
-  assert.doesNotMatch(acceptHandler, /interaction\.update\(/);
+  const listenerStart = indexSource.indexOf("client.on('interactionCreate'");
+  const listener = indexSource.slice(listenerStart);
+  const acknowledgementBranch = listener.indexOf("const usesPrivateReply = ['shopopen', 'shopbuy', 'shopactivate'].includes(ns);");
+  const claimAt = listener.indexOf("await db.claimDiscordEvent('interaction', interaction.id)");
+  const memberFetchAt = listener.indexOf('await interaction.guild.members.fetch');
+  assert.ok(listenerStart >= 0 && acknowledgementBranch >= 0);
+  assert.ok(claimAt > acknowledgementBranch);
+  assert.ok(memberFetchAt > claimAt);
+  assert.match(listener.slice(acknowledgementBranch, claimAt), /await interaction\.deferReply/);
+  assert.match(listener.slice(acknowledgementBranch, claimAt), /await interaction\.deferUpdate/);
+  assert.doesNotMatch(listener, /interaction\.update\(/);
 });

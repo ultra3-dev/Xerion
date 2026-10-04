@@ -105,9 +105,15 @@ function computeNextGoal(member, dbUser) {
 
 // Solo quien fue autorizado (dueño del reto, jugador del blackjack, etc.)
 // puede usar un botón — así nadie más "roba" la interacción de otro.
+function replyButton(interaction, payload) {
+  if (interaction.__xerionPrivateDeferred) return interaction.editReply(payload);
+  if (interaction.deferred || interaction.replied) return interaction.followUp(payload);
+  return interaction.reply(payload);
+}
+
 function checkButtonOwner(interaction, allowedId) {
   if (interaction.user.id !== allowedId) {
-    interaction.reply({
+    replyButton(interaction, {
       ...ui.errorCard(cfg, 'Este botón no es tuyo', 'Solo quien abrió este menú puede usarlo.'),
       flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
     }).catch(() => {});
@@ -621,7 +627,7 @@ function leaderboardEntriesForGuild(entries, guild, page = 0) {
 }
 
 commands.leaderboard = async (message) => {
-  const entries = await leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild, 0);
+  const entries = leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild, 0);
   return message.channel.send(ui.leaderboardContainer(cfg, 'rich', 0, entries, message.author.id));
 };
 
@@ -891,15 +897,36 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
   try {
     if (!interaction.isButton()) return;
+    const [ns, action, allowedId, catalogType, pageRaw, targetId] = interaction.customId.split(':');
+    const usesPrivateReply = ['shopopen', 'shopbuy', 'shopactivate'].includes(ns);
+    if (usesPrivateReply) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      interaction.__xerionPrivateDeferred = true;
+    } else {
+      await interaction.deferUpdate();
+    }
     let claimed;
     try {
       claimed = await db.claimDiscordEvent('interaction', interaction.id);
     } catch (claimError) {
       console.error('[interaction-idempotency] No se pudo reclamar la interacción:', claimError.message);
+      if (usesPrivateReply) {
+        await replyButton(interaction, {
+          ...ui.errorCard(cfg, 'No se pudo procesar', 'Inténtalo de nuevo en unos segundos.'),
+          flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        }).catch(() => {});
+      }
       return;
     }
-    if (!claimed) return;
-    const [ns, action, allowedId, catalogType, pageRaw, targetId] = interaction.customId.split(':');
+    if (!claimed) {
+      if (usesPrivateReply) {
+        await replyButton(interaction, {
+          ...ui.infoCard(cfg, 'Solicitud recibida', 'Esta interacción ya fue procesada.'),
+          flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        }).catch(() => {});
+      }
+      return;
+    }
 
     if (ns === 'shopopen') {
       if (!checkButtonOwner(interaction, allowedId)) return;
@@ -907,15 +934,12 @@ client.on('interactionCreate', async (interaction) => {
       const view = action === 'eventshop'
         ? ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser)
         : ui.shopContainer(cfg, allowedId);
-      return interaction.reply({
-        ...view,
-        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
-      });
+      return interaction.editReply(view);
     }
 
     if (ns === 'help') {
       if (!checkButtonOwner(interaction, allowedId)) return;
-      return interaction.update(ui.helpContainer(cfg, action, allowedId));
+      return interaction.editReply(ui.helpContainer(cfg, action, allowedId));
     }
 
     if (ns === 'classpick') {
@@ -923,12 +947,12 @@ client.on('interactionCreate', async (interaction) => {
       const dbUser = db.getUser(allowedId);
       const result = economy.setClass(dbUser, action);
       if (result.error === 'level_required') {
-        return interaction.update(ui.errorCard(cfg, 'Clase bloqueada', `Necesitas llegar al nivel ${result.level} para elegir una clase.`));
+        return interaction.editReply(ui.errorCard(cfg, 'Clase bloqueada', `Necesitas llegar al nivel ${result.level} para elegir una clase.`));
       }
       if (result.error) {
-        return interaction.update(ui.classListContainer(cfg, dbUser, allowedId));
+        return interaction.editReply(ui.classListContainer(cfg, dbUser, allowedId));
       }
-      return interaction.update(ui.classListContainer(cfg, dbUser, allowedId));
+      return interaction.editReply(ui.classListContainer(cfg, dbUser, allowedId));
     }
 
     if (ns === 'top') {
@@ -944,8 +968,8 @@ client.on('interactionCreate', async (interaction) => {
         page = 0;
       }
       const entries = mode === 'debt' ? economy.getDebtLeaderboard(100) : economy.getLeaderboard(100);
-      const resolvedEntries = await leaderboardEntriesForGuild(entries, interaction.guild, page);
-      return interaction.update(ui.leaderboardContainer(cfg, mode, page, resolvedEntries, allowedId));
+      const resolvedEntries = leaderboardEntriesForGuild(entries, interaction.guild, page);
+      return interaction.editReply(ui.leaderboardContainer(cfg, mode, page, resolvedEntries, allowedId));
     }
 
     if (ns === 'catalog' && action === 'page') {
@@ -954,12 +978,12 @@ client.on('interactionCreate', async (interaction) => {
       const safePage = Number.isInteger(page) ? page : 0;
       if (catalogType === 'eventshop') {
         const dbUser = db.getUser(allowedId);
-        return interaction.update(ui.eventShopContainer(
+        return interaction.editReply(ui.eventShopContainer(
           cfg, new Date(), interaction.member, allowedId, dbUser, safePage,
         ));
       }
       if (catalogType === 'armory') {
-        return interaction.update(ui.armoryContainer(cfg, db.getUser(allowedId), allowedId, safePage));
+        return interaction.editReply(ui.armoryContainer(cfg, db.getUser(allowedId), allowedId, safePage));
       }
       if (catalogType === 'inventory') {
         const inventoryOwnerId = targetId || allowedId;
@@ -968,7 +992,7 @@ client.on('interactionCreate', async (interaction) => {
           || (inventoryOwnerId === interaction.user.id
             ? interaction.member
             : { displayName: targetData.displayName || `Usuario ${inventoryOwnerId}` });
-        return interaction.update(ui.inventoryContainer(
+        return interaction.editReply(ui.inventoryContainer(
           cfg, targetMember, targetData, allowedId, safePage,
         ));
       }
@@ -976,7 +1000,6 @@ client.on('interactionCreate', async (interaction) => {
 
     if (ns === 'shopbuy') {
       if (!checkButtonOwner(interaction, allowedId)) return;
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
       const dbUser = db.getUser(allowedId);
       const resultPayload = await executeBuy(action, dbUser, interaction.member, 1);
       const catalogPage = Number.parseInt(catalogType, 10) || 0;
@@ -990,7 +1013,6 @@ client.on('interactionCreate', async (interaction) => {
 
     if (ns === 'shopactivate') {
       if (!checkButtonOwner(interaction, allowedId)) return;
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
       const dbUser = db.getUser(allowedId);
       const resultPayload = await executeActivateEventRole(action, dbUser, interaction.member);
       const catalogPage = Number.parseInt(catalogType, 10) || 0;
@@ -1005,20 +1027,20 @@ client.on('interactionCreate', async (interaction) => {
 
       if (action === 'hit') {
         const game = economy.bjHit(allowedId);
-        if (!game) return interaction.deferUpdate();
+        if (!game) return;
         if (game.status === 'bust') {
           economy.bjResolve(dbUser, game);
           const c = ui.blackjackCard(cfg, member, game, { hideDealer: false, footer: `Te pasaste de 21. Perdiste **-${db.fmt(game.bet)}**${cfg.CANDY_EMOJI}.`, color: cfg.COLORS.ERROR });
-          return interaction.update(ui.payload(c));
+          return interaction.editReply(ui.payload(c));
         }
         const c = ui.blackjackCard(cfg, member, game, { hideDealer: true, footer: 'Usa los botones para jugar.' });
         c.addActionRowComponents(ui.blackjackButtons(allowedId));
-        return interaction.update(ui.payload(c));
+        return interaction.editReply(ui.payload(c));
       }
 
       if (action === 'stand') {
         const game = economy.bjStand(allowedId);
-        if (!game) return interaction.deferUpdate();
+        if (!game) return;
         const resolution = economy.bjResolve(dbUser, game);
         const footerMap = {
           win: `¡Ganaste! +${db.fmt(resolution.net)}${cfg.CANDY_EMOJI}`,
@@ -1030,7 +1052,7 @@ client.on('interactionCreate', async (interaction) => {
           win: cfg.COLORS.SUCCESS, blackjack: cfg.COLORS.SUCCESS, push: cfg.COLORS.GOLD, lose: cfg.COLORS.ERROR,
         };
         const c = ui.blackjackCard(cfg, member, game, { hideDealer: false, footer: footerMap[resolution.result], color: colorMap[resolution.result] });
-        return interaction.update(ui.payload(c));
+        return interaction.editReply(ui.payload(c));
       }
     }
 
@@ -1038,14 +1060,13 @@ client.on('interactionCreate', async (interaction) => {
       if (!checkButtonOwner(interaction, allowedId)) return;
       const challenge = economy.getDuelChallenge(allowedId);
       if (!challenge) {
-        return interaction.update(ui.errorCard(cfg, 'Este reto ya no existe', 'Puede que haya expirado o ya se haya respondido.'));
+        return interaction.editReply(ui.errorCard(cfg, 'Este reto ya no existe', 'Puede que haya expirado o ya se haya respondido.'));
       }
       if (action === 'decline') {
         economy.cancelDuelChallenge(allowedId);
-        return interaction.update(ui.infoCard(cfg, 'Duelo rechazado', `${interaction.member.displayName} decidió no pelear.`));
+        return interaction.editReply(ui.infoCard(cfg, 'Duelo rechazado', `${interaction.member.displayName} decidió no pelear.`));
       }
       if (action === 'accept') {
-        await interaction.deferUpdate();
         const { challengerId, bet } = challenge;
         const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
         if (!challengerMember) {
@@ -1081,23 +1102,23 @@ client.on('interactionCreate', async (interaction) => {
 
     if (ns === 'confirm' && action === 'reset') {
       if (interaction.user.id !== cfg.OWNER_ID) {
-        return interaction.reply({
+        return replyButton(interaction, {
           ...ui.errorCard(cfg, 'Solo el dueño del bot', 'No se hicieron cambios.'),
           flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
         });
       }
       db.resetUser(allowedId);
-      return interaction.update(ui.successCard(cfg, 'Usuario reiniciado', `El perfil económico de <@${allowedId}> fue reiniciado.`));
+      return interaction.editReply(ui.successCard(cfg, 'Usuario reiniciado', `El perfil económico de <@${allowedId}> fue reiniciado.`));
     }
 
     if (ns === 'cancel' && action === 'reset') {
       if (interaction.user.id !== cfg.OWNER_ID) {
-        return interaction.reply({
+        return replyButton(interaction, {
           ...ui.errorCard(cfg, 'Solo el dueño del bot', 'No se hicieron cambios.'),
           flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
         });
       }
-      return interaction.update(ui.infoCard(cfg, 'Cancelado', 'No se hicieron cambios.'));
+      return interaction.editReply(ui.infoCard(cfg, 'Cancelado', 'No se hicieron cambios.'));
     }
   } catch (err) {
     console.error('[interactionCreate] Error:', err);
@@ -1106,8 +1127,7 @@ client.on('interactionCreate', async (interaction) => {
         ...ui.errorCard(cfg, 'Ocurrió un error inesperado', 'Inténtalo de nuevo; si se repite, avísale al equipo del bot.'),
         flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
       };
-      if (interaction.deferred || interaction.replied) await interaction.followUp(errPayload);
-      else await interaction.reply(errPayload);
+      await replyButton(interaction, errPayload);
     } catch (_) { /* noop */ }
   }
 });
