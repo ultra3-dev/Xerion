@@ -17,6 +17,7 @@ const db = require('../database');
 const economy = require('../economy');
 const ui = require('../ui');
 const dashboard = require('../dashboard');
+const { resolveLeaderboardEntries } = require('../leaderboard-names');
 
 function countComponents(value) {
   if (Array.isArray(value)) return value.reduce((total, item) => total + countComponents(item), 0);
@@ -323,20 +324,67 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('global leaderboard renders real user mention tags without sending pings', () => {
+test('global leaderboard resolves guild and global names without pings or Unknown-user labels', () => {
+  const guildMemberId = '123456789012345678';
+  const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
-    { id: '123456789012345678', displayName: 'Alice Example', value: 500 },
+    { id: guildMemberId, displayName: 'Guild Nick', isGuildMember: true, value: 500 },
+    { id: globalUserId, displayName: 'Global Name', isGuildMember: false, value: 300 },
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, /<@123456789012345678>/);
-  assert.match(rendered, /@Usuario legacy-player/);
-  assert.doesNotMatch(rendered, /<@legacy-player>/);
+  assert.match(rendered, new RegExp(`<@${guildMemberId}>`));
+  assert.match(rendered, /@Global Name/);
+  assert.match(rendered, /@Jugador sin nombre/);
+  assert.doesNotMatch(rendered, /Unknown-user/i);
   assert.deepEqual(view.allowedMentions, {
     parse: [],
-    users: ['123456789012345678'],
+    users: [guildMemberId],
   });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
+});
+
+test('leaderboard resolves current-page members and global users before using a neutral fallback', async () => {
+  const memberId = '123456789012345678';
+  const globalId = '234567890123456789';
+  const laterPageId = '345678901234567890';
+  const memberLookups = [];
+  const userLookups = [];
+  const resolved = await resolveLeaderboardEntries([
+    { id: memberId, value: 500 },
+    { id: globalId, value: 300 },
+    { id: laterPageId, value: 100 },
+  ], {
+    guild: {
+      members: {
+        cache: new Map(),
+        async fetch(id) {
+          memberLookups.push(id);
+          if (id === memberId) return { displayName: 'Guild Nick' };
+          throw new Error('Not a member of this guild');
+        },
+      },
+    },
+    users: {
+      cache: new Map(),
+      async fetch(id) {
+        userLookups.push(id);
+        if (id === globalId) return { globalName: 'Global Name', username: 'global_user' };
+        throw new Error('User unavailable');
+      },
+    },
+    page: 0,
+    pageSize: 2,
+    getSavedName: () => '',
+  });
+
+  assert.equal(resolved[0].displayName, 'Guild Nick');
+  assert.equal(resolved[0].isGuildMember, true);
+  assert.equal(resolved[1].displayName, 'Global Name');
+  assert.equal(resolved[1].isGuildMember, false);
+  assert.equal(resolved[2].displayName, 'Jugador sin nombre');
+  assert.deepEqual(memberLookups, [memberId, globalId]);
+  assert.deepEqual(userLookups, [globalId]);
 });
 
 test('Discord message and interaction IDs are processed at most once per process', async () => {

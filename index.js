@@ -22,6 +22,7 @@ const db = require('./database');
 const economy = require('./economy');
 const ui = require('./ui');
 const dashboard = require('./dashboard');
+const { resolveLeaderboardEntries } = require('./leaderboard-names');
 
 if (!process.env.BOT_TOKEN) {
   console.error('❌ Falta BOT_TOKEN. Define la variable en .env o en el panel de Render.');
@@ -608,20 +609,18 @@ commands.inventory = async (message, args, member, dbUser) => {
 
 // ---------- Información ----------
 
-function leaderboardEntriesForGuild(entries, guild) {
-  return entries.map((entry) => {
-    const member = guild?.members?.cache?.get(entry.id);
-    const user = client.users.cache.get(entry.id);
-    const savedName = db.getUser(entry.id).displayName;
-    return {
-      ...entry,
-      displayName: member?.displayName || user?.globalName || user?.username || savedName || `Usuario ${entry.id}`,
-    };
+function leaderboardEntriesForGuild(entries, guild, page = 0) {
+  return resolveLeaderboardEntries(entries, {
+    guild,
+    users: client.users,
+    page,
+    pageSize: 10,
+    getSavedName: (id) => db.getUser(id).displayName,
   });
 }
 
 commands.leaderboard = async (message) => {
-  const entries = leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild);
+  const entries = await leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild, 0);
   return message.channel.send(ui.leaderboardContainer(cfg, 'rich', 0, entries, message.author.id));
 };
 
@@ -922,7 +921,8 @@ client.on('interactionCreate', async (interaction) => {
         page = 0;
       }
       const entries = mode === 'debt' ? economy.getDebtLeaderboard(100) : economy.getLeaderboard(100);
-      return interaction.update(ui.leaderboardContainer(cfg, mode, page, leaderboardEntriesForGuild(entries, interaction.guild), allowedId));
+      const resolvedEntries = await leaderboardEntriesForGuild(entries, interaction.guild, page);
+      return interaction.update(ui.leaderboardContainer(cfg, mode, page, resolvedEntries, allowedId));
     }
 
     if (ns === 'catalog' && action === 'page') {
