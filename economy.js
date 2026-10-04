@@ -130,18 +130,6 @@ function parseAmount(input, maxAvailable) {
   return Math.floor(num);
 }
 
-// ---------- Ganancia pasiva por mensaje ----------
-
-function earnFromMessage(user) {
-  const now = Date.now();
-  if (now - (user.lastMessageAt || 0) < cfg.MESSAGE_COOLDOWN_MS) return { earned: false };
-  user.lastMessageAt = now;
-  const amount = cfg.MESSAGE_REWARD + effectBonus(user, 'greed');
-  user.cash += amount;
-  db.markDirty(user);
-  return { earned: true, amount };
-}
-
 // ---------- Banco ----------
 
 function deposit(user, amount) {
@@ -293,7 +281,7 @@ const FLAVOR = {
 function doWork(user) {
   const used = consumeUse(user, 'work');
   if (used.error) return used;
-  let reward = Math.round(db.randomInt(cfg.WORK_MIN, cfg.WORK_MAX) * (1 + permanentBonus(user, 'workReward')));
+  let reward = Math.round(db.randomInt(cfg.WORK_MIN, cfg.WORK_MAX) * (1 + permanentBonus(user, 'workReward') + effectBonus(user, 'greed')));
   reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
   user.cash += reward;
   db.incrementStat(user, 'totalWorked');
@@ -319,7 +307,7 @@ function doScavenge(user) {
   const used = consumeUse(user, 'scavenge');
   if (used.error) return used;
   const reward = Math.min(
-    Math.round(db.randomInt(cfg.SCAVENGE_REWARD_MIN, cfg.SCAVENGE_REWARD_MAX) * (1 + permanentBonus(user, 'workReward'))),
+    Math.round(db.randomInt(cfg.SCAVENGE_REWARD_MIN, cfg.SCAVENGE_REWARD_MAX) * (1 + permanentBonus(user, 'workReward') + effectBonus(user, 'greed'))),
     cfg.MAX_SINGLE_GAIN,
   );
   user.cash += reward;
@@ -1144,7 +1132,6 @@ function resolveWorldEvent() {
 
 module.exports = {
   potionDef, classDef, weaponDef, effectBonus, hasEffect, permanentBonus, parseAmount,
-  earnFromMessage,
   deposit, withdraw, transfer, payDebt, placeBounty,
   doWork, doBeg, doScavenge, doHarvest, doCandyRaid, doTrickOrTreat, doCrime,
   attemptRob,
