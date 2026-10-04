@@ -1,5 +1,28 @@
 'use strict';
 
+const QUEST_TARGETS = [1, 2, 3, 5, 8];
+const QUEST_ACTIONS = [
+  { id: 'work', action: 'work', task: 'turnos de trabajo' },
+  { id: 'beg', action: 'beg', task: 'recompensas de beg conseguidas' },
+  { id: 'crime', action: 'crime', task: 'delitos exitosos' },
+  { id: 'scavenge', action: 'scavenge', task: 'búsquedas de botín' },
+  { id: 'harvest', action: 'harvest', task: 'cosechas' },
+  { id: 'candyraid', action: 'candyraid', task: 'cabalgatas exitosas' },
+  { id: 'trickortreat', action: 'trickortreat', task: 'recompensas de truco o trato' },
+  { id: 'rob', action: 'rob', task: 'robos exitosos' },
+  { id: 'hunt', action: 'hunt', task: 'cacerías exitosas' },
+  { id: 'dungeon', action: 'dungeon', task: 'mazmorras superadas' },
+  { id: 'boss', action: 'boss', task: 'jefes derrotados' },
+  { id: 'duel', action: 'duel', task: 'duelos ganados' },
+  { id: 'collect', action: 'collect', task: 'ingresos de rol reclamados' },
+];
+const QUEST_MISSIONS = QUEST_ACTIONS.flatMap((action) => QUEST_TARGETS.map((target) => ({
+  id: `${action.id}_${target}`,
+  action: action.action,
+  target,
+  description: `Completa ${target} ${action.task}.`,
+})));
+
 // ============================================================
 //  CONFIGURACIÓN GENERAL — Bot de Economía de Halloween (Xn)
 //  v1.0.0 Halloween Release — RPG + RNG + Economy, 50 comandos.
@@ -36,7 +59,7 @@ module.exports = {
   MESSAGE_COOLDOWN_MS: 3 * 1000, // bajado de 10s a 3s
   MESSAGE_REWARD: 1,
 
-  // --- Límite duro de la economía: ninguna acción normal da más que esto ---
+  // --- Límite de ganancias de acciones normales (no limita las apuestas) ---
   MAX_SINGLE_GAIN: 3000,
 
   // --- Banco ---
@@ -149,6 +172,18 @@ module.exports = {
   // --- RPG: duelo (duel) ---
   DUEL_TIMEOUT_MS: 60 * 1000,
   DUEL_BASE_CHANCE: 0.5,
+  DUEL_NARRATIONS: [
+    'La espada silba en el aire y el público contiene el aliento.',
+    'Un golpe levanta polvo del suelo; nadie cede terreno.',
+    'El viento apaga las antorchas justo antes del último ataque.',
+    'El rival esquiva por poco y responde con un giro inesperado.',
+    'Una chispa cruza el campo: el siguiente movimiento lo decide todo.',
+    'Las sombras rodean la arena mientras ambos buscan una abertura.',
+    'Un choque de armas resuena por todo el cementerio.',
+    'La calabaza del árbitro rueda por el suelo: ¡último asalto!',
+    'Una ráfaga fantasmal cambia el ritmo de la pelea.',
+    'El suelo tiembla bajo el choque final de los combatientes.',
+  ],
 
   // --- RPG: mazmorra (dungeon) ---
   DUNGEON_SUCCESS_CHANCE: 0.55,
@@ -172,6 +207,7 @@ module.exports = {
   QUEST_BONUS_CHANCE: 0.15,
   QUEST_BONUS_MIN: 50,
   QUEST_BONUS_MAX: 200,
+  QUEST_MISSIONS,
 
   // --- daily ---
   DAILY_REWARD_MIN: 300,
@@ -278,8 +314,7 @@ module.exports = {
     { id: 'leyenda', name: 'Leyenda de Halloween', emoji: '🏆', desc: 'Alcanza el nivel 10.', source: 'level', threshold: 10 },
   ],
 
-  // --- Casino (Spooky Gamble) ---
-  MAX_BET: 3000,
+  // --- Casino (Spooky Gamble): apuestas limitadas solo por el saldo del usuario ---
   GAMBLE_WIN_CHANCE: 0.47,
   SLOTS_SYMBOLS: [
     { symbol: '🎃', weight: 30 },
@@ -368,19 +403,61 @@ module.exports = {
     },
   ],
 
+  // --- Materiales de fabricación: nombres mostrados en inglés ---
+  MATERIALS: [
+    { id: 'amber_dust', name: 'Amber Dust', emoji: '🟠' },
+    { id: 'bat_wing', name: 'Bat Wing', emoji: '🦇' },
+    { id: 'black_rose', name: 'Black Rose', emoji: '🥀' },
+    { id: 'bone_fragment', name: 'Bone Fragment', emoji: '🦴' },
+    { id: 'candle_wax', name: 'Candle Wax', emoji: '🕯️' },
+    { id: 'candy_corn', name: 'Candy Corn', emoji: '🍬' },
+    { id: 'charred_wood', name: 'Charred Wood', emoji: '🪵' },
+    { id: 'cobweb_silk', name: 'Cobweb Silk', emoji: '🕸️' },
+    { id: 'cursed_ash', name: 'Cursed Ash', emoji: '🌫️' },
+    { id: 'cursed_rune', name: 'Cursed Rune', emoji: '🔮' },
+    { id: 'dark_essence', name: 'Dark Essence', emoji: '🌑' },
+    { id: 'demon_horn', name: 'Demon Horn', emoji: '👹' },
+    { id: 'ectoplasm', name: 'Ectoplasm', emoji: '👻' },
+    { id: 'enchanted_leaf', name: 'Enchanted Leaf', emoji: '🍃' },
+    { id: 'fang', name: 'Vampire Fang', emoji: '🧛' },
+    { id: 'ghost_lantern', name: 'Ghost Lantern', emoji: '🏮' },
+    { id: 'grave_dirt', name: 'Grave Dirt', emoji: '⚰️' },
+    { id: 'haunted_thread', name: 'Haunted Thread', emoji: '🧵' },
+    { id: 'moon_shard', name: 'Moon Shard', emoji: '🌙' },
+    { id: 'nightshade', name: 'Nightshade', emoji: '🌿' },
+    { id: 'obsidian', name: 'Obsidian', emoji: '⬛' },
+    { id: 'phantom_feather', name: 'Phantom Feather', emoji: '🪶' },
+    { id: 'pumpkin_seed', name: 'Pumpkin Seed', emoji: '🎃' },
+    { id: 'pumpkin_spice', name: 'Pumpkin Spice', emoji: '🥧' },
+    { id: 'raven_feather', name: 'Raven Feather', emoji: '🐦‍⬛' },
+    { id: 'rotten_flesh', name: 'Rotten Flesh', emoji: '🧟' },
+    { id: 'silver_coin', name: 'Silver Coin', emoji: '🪙' },
+    { id: 'soul_crystal', name: 'Soul Crystal', emoji: '💎' },
+    { id: 'spectral_ink', name: 'Spectral Ink', emoji: '🖋️' },
+    { id: 'spider_silk', name: 'Spider Silk', emoji: '🕷️' },
+    { id: 'star_fragment', name: 'Star Fragment', emoji: '⭐' },
+    { id: 'sugar_skull', name: 'Sugar Skull', emoji: '💀' },
+    { id: 'tombstone_chip', name: 'Tombstone Chip', emoji: '🪦' },
+    { id: 'trick_token', name: 'Trick Token', emoji: '🎟️' },
+    { id: 'twilight_moss', name: 'Twilight Moss', emoji: '🌱' },
+    { id: 'void_tear', name: 'Void Tear', emoji: '🫧' },
+    { id: 'witch_herb', name: 'Witch Herb', emoji: '🧙' },
+    { id: 'wolf_claw', name: 'Wolf Claw', emoji: '🐺' },
+    { id: 'wyvern_scale', name: 'Wyvern Scale', emoji: '🐉' },
+  ],
+
   // --- Tienda del Evento (roles) ---
   EVENT_SHOP: [
-    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 250000 },
-    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 200000 },
-    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 150000 },
-    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 100000 },
-    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 75000 },
-    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 50000 },
-    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 30000 },
-    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 15000 },
-    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 5000 },
+    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 369000, collectCooldownMs: 3 * 24 * 60 * 60 * 1000, requirements: { cursed_rune: 8, soul_crystal: 10, void_tear: 8, bat_wing: 12 } },
+    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 280000, collectCooldownMs: 60 * 60 * 1000 * 60, requirements: { black_rose: 8, dark_essence: 8, silver_coin: 12, phantom_feather: 10 } },
+    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 210000, collectCooldownMs: 48 * 60 * 60 * 1000, requirements: { soul_crystal: 6, obsidian: 10, wyvern_scale: 8, spectral_ink: 8 } },
+    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 160000, collectCooldownMs: 36 * 60 * 60 * 1000, requirements: { demon_horn: 6, moon_shard: 8, ghost_lantern: 8, cursed_ash: 10 } },
+    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 120000, collectCooldownMs: 24 * 60 * 60 * 1000, requirements: { ectoplasm: 8, raven_feather: 8, nightshade: 10, tombstone_chip: 10 } },
+    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 85000, collectCooldownMs: 18 * 60 * 60 * 1000, requirements: { fang: 6, bone_fragment: 10, enchanted_leaf: 10, trick_token: 8 } },
+    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 55000, collectCooldownMs: 12 * 60 * 60 * 1000, requirements: { wolf_claw: 6, charred_wood: 8, spider_silk: 8, pumpkin_spice: 8 } },
+    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 30000, collectCooldownMs: 8 * 60 * 60 * 1000, requirements: { amber_dust: 5, candle_wax: 6, haunted_thread: 6, twilight_moss: 6 } },
+    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 12000, collectCooldownMs: 4 * 60 * 60 * 1000, requirements: { candy_corn: 4, grave_dirt: 5, pumpkin_seed: 5, sugar_skull: 4 } },
   ],
-  EVENT_COLLECT_REWARD_CAP: 300000,
   // Horas en UTC a propósito: así el evento empieza/termina igual sin importar
   // en qué zona horaria esté el servidor donde corra el bot (ej. Render = UTC).
   EVENT_START: new Date('2026-10-03T00:00:00Z'),

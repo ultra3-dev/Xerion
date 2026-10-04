@@ -21,6 +21,7 @@ const cfg = require('./config');
 const db = require('./database');
 const economy = require('./economy');
 const ui = require('./ui');
+const dashboard = require('./dashboard');
 
 if (!process.env.BOT_TOKEN) {
   console.error('❌ Falta BOT_TOKEN. Define la variable en .env o en el panel de Render.');
@@ -70,6 +71,22 @@ function countActiveEffects(dbUser) {
   return cfg.POTIONS.filter((p) => db.getEffectRemaining(dbUser, p.id) > 0).length;
 }
 
+function activityNotice(activity) {
+  if (!activity) return '';
+  const notices = [];
+  if (activity.materials?.length) {
+    notices.push(`🧱 Material: ${activity.materials.map((item) => `${item.emoji} **${item.name}** ×${item.quantity}`).join(', ')}.`);
+  }
+  if (activity.questProgress?.completed) {
+    const progress = activity.questProgress;
+    notices.push(`✅ Misión completada: **${progress.quest.description}** · premio **+${db.fmt(progress.reward)}**${cfg.CANDY_EMOJI}.`);
+  } else if (activity.questProgress) {
+    const progress = activity.questProgress;
+    notices.push(`📜 Misión: **${progress.quest.progress}/${progress.quest.target}** — ${progress.quest.description}`);
+  }
+  return notices.length ? `\n\n${notices.join('\n')}` : '';
+}
+
 // Sugiere la meta más barata de la tienda del evento que el usuario todavía
 // no compró y no puede costear ahora mismo (para el balance avanzado).
 function computeNextGoal(member, dbUser) {
@@ -88,7 +105,10 @@ function computeNextGoal(member, dbUser) {
 // puede usar un botón — así nadie más "roba" la interacción de otro.
 function checkButtonOwner(interaction, allowedId) {
   if (interaction.user.id !== allowedId) {
-    interaction.reply({ content: 'Este botón no es tuyo.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    interaction.reply({
+      ...ui.errorCard(cfg, 'Este botón no es tuyo', 'Solo quien abrió este menú puede usarlo.'),
+      flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+    }).catch(() => {});
     return false;
   }
   return true;
@@ -154,13 +174,13 @@ commands.pay = async (message, args, member, dbUser) => {
 commands.work = async (message, args, member, dbUser) => {
   const result = economy.doWork(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Todavía cansado', `Podrás trabajar de nuevo en ${db.formatDuration(result.remaining)}.`));
-  return message.channel.send(ui.successCard(cfg, 'Trabajo terminado', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  return message.channel.send(ui.successCard(cfg, 'Trabajo terminado', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
 };
 
 commands.crime = async (message, args, member, dbUser) => {
   const result = economy.doCrime(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Muy pronto', `Podrás intentarlo de nuevo en ${db.formatDuration(result.remaining)}.`));
-  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Crimen exitoso!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Crimen exitoso!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Te salvaste!', `${result.flavor}, pero tu Elixir de Resurrección anuló la deuda justo a tiempo.`));
   return message.channel.send(ui.errorCard(cfg, '¡Te atraparon!', `${result.flavor}. La Bruja te dejó con **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI} de deuda.`));
 };
@@ -169,25 +189,25 @@ commands.beg = async (message, args, member, dbUser) => {
   const result = economy.doBeg(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Espera un poco', `Podrás pedir de nuevo en ${db.formatDuration(result.remaining)}.`));
   if (result.reward === 0) return message.channel.send(ui.infoCard(cfg, 'Nada de nada', `${result.flavor}.`));
-  return message.channel.send(ui.successCard(cfg, 'Consiguiste algo', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  return message.channel.send(ui.successCard(cfg, 'Consiguiste algo', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
 };
 
 commands.scavenge = async (message, args, member, dbUser) => {
   const result = economy.doScavenge(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Agotaste la zona', `Podrás buscar dulces otra vez en ${db.formatDuration(result.remaining)}.`));
-  return message.channel.send(ui.successCard(cfg, '¡Botín encontrado!', `${result.flavor} y conseguiste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  return message.channel.send(ui.successCard(cfg, '¡Botín encontrado!', `${result.flavor} y conseguiste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
 };
 
 commands.harvest = async (message, args, member, dbUser) => {
   const result = economy.doHarvest(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'El huerto necesita descansar', `Podrás cosechar dulces de nuevo en ${db.formatDuration(result.remaining)}.`));
-  return message.channel.send(ui.successCard(cfg, '¡Cosecha embrujada!', `${result.flavor}\nConseguiste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  return message.channel.send(ui.successCard(cfg, '¡Cosecha embrujada!', `${result.flavor}\nConseguiste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
 };
 
 commands.candyraid = async (message, args, member, dbUser) => {
   const result = economy.doCandyRaid(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'La pandilla necesita descansar', `Podrás unirte a otra cabalgata en ${db.formatDuration(result.remaining)}.`));
-  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Cabalgata de dulces!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Cabalgata de dulces!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Te salvaste!', `${result.flavor} El Elixir de Resurrección anuló la deuda.`));
   return message.channel.send(ui.errorCard(cfg, 'La niebla se quedó con el botín', `${result.flavor}\nDeuda: **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI}.`));
 };
@@ -195,7 +215,7 @@ commands.candyraid = async (message, args, member, dbUser) => {
 commands.trickortreat = async (message, args, member, dbUser) => {
   const result = economy.doTrickOrTreat(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Ya pasaste hoy', `Vuelve a intentarlo en ${db.formatDuration(result.remaining)}.`));
-  if (result.treat) return message.channel.send(ui.successCard(cfg, '¡Dulce!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.treat) return message.channel.send(ui.successCard(cfg, '¡Dulce!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Truco esquivado!', `${result.flavor}, pero tu Elixir de Resurrección te salvó de la deuda.`));
   return message.channel.send(ui.errorCard(cfg, '¡Truco!', `${result.flavor}. Te quedaste con **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI} de deuda.`));
 };
@@ -213,15 +233,22 @@ commands.rob = async (message, args, member, dbUser) => {
   if (result.error === 'target_shadow') return message.channel.send(ui.errorCard(cfg, 'No puedes verlo', 'Una Poción de las Sombras lo hace invisible ante los ladrones ahora mismo.'));
   if (result.success) {
     const bountyText = result.bountyClaimed > 0 ? ` 🎯 ¡También cobraste su recompensa de **+${db.fmt(result.bountyClaimed)}**${cfg.CANDY_EMOJI}!` : '';
-    return message.channel.send(ui.successCard(cfg, '¡Robo exitoso!', `${result.flavor} de **${targetMember.displayName}** y conseguiste **+${db.fmt(result.amount)}**${cfg.CANDY_EMOJI}.${bountyText}`));
+    return message.channel.send(ui.successCard(cfg, '¡Robo exitoso!', `${result.flavor} de **${targetMember.displayName}** y conseguiste **+${db.fmt(result.amount)}**${cfg.CANDY_EMOJI}.${bountyText}${activityNotice(result.activity)}`));
   }
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Casi te atrapan!', `${targetMember.displayName} ${result.flavor}, pero tu Elixir de Resurrección anuló la deuda justo a tiempo.`));
   return message.channel.send(ui.errorCard(cfg, '¡Te atraparon!', `${targetMember.displayName} ${result.flavor}. La Bruja te cobró **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI} de deuda.`));
 };
 
 commands.debt = async (message, args, member, dbUser) => {
-  if (dbUser.debt <= 0) return message.channel.send(ui.successCard(cfg, 'Sin deudas', 'No le debes nada a la Bruja de Halloween. 🎉'));
-  return message.channel.send(ui.debtCard(cfg, 'Tu deuda con la Bruja', `💀 **Debt:** -${db.fmt(dbUser.debt)}${cfg.CANDY_EMOJI}\n\nPágala con \`${cfg.PREFIX} paydebt [cantidad]\` antes de poder comprar en las tiendas.`));
+  const targetMember = message.mentions.members?.first() || member;
+  const targetData = targetMember.id === message.author.id ? dbUser : db.getUser(targetMember.id);
+  if (targetData.debt <= 0) {
+    return message.channel.send(ui.successCard(cfg, `Sin deudas · ${targetMember.displayName}`, 'No le debe nada a la Bruja de Halloween. 🎉'));
+  }
+  const paymentHint = targetMember.id === message.author.id
+    ? `\nPágala con \`${cfg.PREFIX} paydebt [cantidad]\` antes de comprar en las tiendas.`
+    : '';
+  return message.channel.send(ui.debtCard(cfg, `Deuda de ${targetMember.displayName}`, `💀 **Debt:** -${db.fmt(targetData.debt)}${cfg.CANDY_EMOJI}${paymentHint}`));
 };
 
 commands.paydebt = async (message, args, member, dbUser) => {
@@ -254,21 +281,20 @@ commands.bounty = async (message, args, member, dbUser) => {
 // ---------- RPG ----------
 
 commands.class = async (message, args, member, dbUser) => {
-  const id = (args[0] || '').toLowerCase();
-  if (!id) return message.channel.send(ui.classListContainer(cfg, dbUser));
+  const id = args.join(' ').trim();
+  if (!id) return message.channel.send(ui.classListContainer(cfg, dbUser, message.author.id));
   const result = economy.setClass(dbUser, id);
   if (result.error === 'notfound') return message.channel.send(ui.errorCard(cfg, 'Clase no encontrada', `Revisa \`${cfg.PREFIX} class\` para ver las opciones.`));
   if (result.error === 'level_required') return message.channel.send(ui.errorCard(cfg, 'Clase bloqueada', `Necesitas llegar al **nivel ${result.level}** para elegir una clase. Tu nivel actual es **${db.getLevel(dbUser.xp)}**.`));
   if (result.error === 'already_chosen') return message.channel.send(ui.errorCard(cfg, 'Tu clase es permanente', 'Ya elegiste tu clase y no se puede cambiar.'));
   if (result.error === 'same_class') return message.channel.send(ui.infoCard(cfg, 'Ya elegiste esta clase', 'Tu elección es permanente y no se puede cambiar.'));
-  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Todavía no puedes cambiar de clase', `Podrás cambiar en ${db.formatDuration(result.remaining)}.`));
   return message.channel.send(ui.successCard(cfg, 'Clase elegida', `Ahora eres ${result.classDef.emoji} **${result.classDef.name}**.\n${result.classDef.desc}`));
 };
 
 commands.hunt = async (message, args, member, dbUser) => {
   const result = economy.doHunt(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Todavía cansado', `Podrás cazar de nuevo en ${db.formatDuration(result.remaining)}.`));
-  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Cacería exitosa!', `Cazaste a ${result.monster.emoji} **${result.monster.name}** y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Cacería exitosa!', `Cazaste a ${result.monster.emoji} **${result.monster.name}** y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   return message.channel.send(ui.errorCard(cfg, 'Se escapó...', `${result.monster.emoji} **${result.monster.name}** logró escapar. Sin recompensa esta vez.`));
 };
 
@@ -281,7 +307,6 @@ commands.duel = async (message, args, member, dbUser) => {
   const bet = economy.parseAmount(rest[0], dbUser.cash);
   if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} duel @usuario <cantidad>\`.`));
   if (bet > dbUser.cash) return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
-  if (bet > cfg.MAX_BET) return message.channel.send(ui.errorCard(cfg, 'Apuesta muy alta', `La apuesta máxima es ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}.`));
   const targetData = db.getUser(targetMember.id);
   if (targetData.cash < bet) return message.channel.send(ui.errorCard(cfg, 'Tu rival no puede cubrir la apuesta', `${targetMember.displayName} no tiene suficiente Cash.`));
 
@@ -303,7 +328,7 @@ commands.duel = async (message, args, member, dbUser) => {
 commands.dungeon = async (message, args, member, dbUser) => {
   const result = economy.doDungeon(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Todavía explorando', `Podrás volver a entrar en ${db.formatDuration(result.remaining)}.`));
-  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Mazmorra superada!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.success) return message.channel.send(ui.successCard(cfg, '¡Mazmorra superada!', `${result.flavor} y ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Te salvaste!', `${result.flavor}, pero tu Elixir de Resurrección anuló la deuda.`));
   return message.channel.send(ui.errorCard(cfg, 'La mazmorra te venció', `${result.flavor}. Quedaste con **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI} de deuda.`));
 };
@@ -311,16 +336,16 @@ commands.dungeon = async (message, args, member, dbUser) => {
 commands.boss = async (message, args, member, dbUser) => {
   const result = economy.doBoss(dbUser);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'El jefe sigue débil', `Podrás retarlo de nuevo en ${db.formatDuration(result.remaining)}.`));
-  if (result.success) return message.channel.send(ui.successCard(cfg, `¡Derrotaste a ${cfg.BOSS_NAME}!`, `${cfg.BOSS_EMOJI} Ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
+  if (result.success) return message.channel.send(ui.successCard(cfg, `¡Derrotaste a ${cfg.BOSS_NAME}!`, `${cfg.BOSS_EMOJI} Ganaste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   if (result.revived) return message.channel.send(ui.infoCard(cfg, '¡Sobreviviste por poco!', `${cfg.BOSS_NAME} casi te vence, pero tu Elixir de Resurrección anuló la deuda.`));
   return message.channel.send(ui.errorCard(cfg, `${cfg.BOSS_NAME} te venció`, `Quedaste con **-${db.fmt(result.debtAmount)}**${cfg.CANDY_EMOJI} de deuda. Inténtalo de nuevo más tarde.`));
 };
 
 commands.quest = async (message, args, member, dbUser) => {
   const result = economy.doQuest(dbUser);
-  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Misión ya entregada', `Vuelve en ${db.formatDuration(result.remaining)}.`));
-  const bonusText = result.gotBonus ? '\n🎁 ¡Encontraste un botín extra en el camino!' : '';
-  return message.channel.send(ui.successCard(cfg, 'Misión completada', `${result.flavor} y ganaste **+${db.fmt(result.total)}**${cfg.CANDY_EMOJI}.${bonusText}`));
+  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Aún no hay otro encargo', `Podrás aceptar una misión nueva en ${db.formatDuration(result.remaining)}.`));
+  if (result.error === 'all_completed') return message.channel.send(ui.infoCard(cfg, 'Completaste todos los encargos', 'Ya terminaste todas las misiones disponibles.'));
+  return message.channel.send(ui.questCard(cfg, member, result.quest));
 };
 
 commands.level = async (message, args, member, dbUser) => message.channel.send(ui.levelCard(cfg, member, dbUser));
@@ -342,10 +367,10 @@ commands.equip = async (message, args, member, dbUser) => {
 
 commands.gamble = async (message, args, member, dbUser) => {
   const bet = economy.parseAmount(args[0], dbUser.cash);
-  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} gamble <cantidad>\` (máx. ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}).`));
+  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} gamble <cantidad|all>\`. Puedes apostar cualquier cantidad de tu Cash.`));
   const result = economy.gamble(dbUser, bet);
   if (result.error === 'insufficient') return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
-  if (result.error === 'maxbet') return message.channel.send(ui.errorCard(cfg, 'Apuesta muy alta', `La apuesta máxima es ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
   if (result.win) return message.channel.send(ui.successCard(cfg, '¡Ganaste el doble o nada!', `La Bruja se equivocó de hechizo. Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI} (recibiste ${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`));
   return message.channel.send(ui.errorCard(cfg, 'Perdiste', `La Bruja se quedó con tus **-${db.fmt(result.lost)}**${cfg.CANDY_EMOJI}. Suerte para la próxima.`));
@@ -353,10 +378,11 @@ commands.gamble = async (message, args, member, dbUser) => {
 
 commands.slots = async (message, args, member, dbUser) => {
   const bet = economy.parseAmount(args[0], dbUser.cash);
-  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} slots <cantidad>\` (máx. ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}).`));
-  if (bet > cfg.MAX_BET) return message.channel.send(ui.errorCard(cfg, 'Apuesta muy alta', `La apuesta máxima es ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}.`));
+  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} slots <cantidad|all>\`. Puedes apostar cualquier cantidad de tu Cash.`));
   if (bet > dbUser.cash) return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
   const result = economy.slots(dbUser, bet);
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
+  if (result.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
   const sent = await message.channel.send(ui.slotsFrame(cfg, ['🌀', '🌀', '🌀'], { spinning: true }));
   const randomFrame = () => [0, 0, 0].map(() => cfg.SLOTS_SYMBOLS[Math.floor(Math.random() * cfg.SLOTS_SYMBOLS.length)].symbol);
   await new Promise((r) => setTimeout(r, 700));
@@ -367,11 +393,11 @@ commands.slots = async (message, args, member, dbUser) => {
 
 commands.blackjack = async (message, args, member, dbUser) => {
   const bet = economy.parseAmount(args[0], dbUser.cash);
-  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} blackjack <cantidad>\` (máx. ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}).`));
+  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} blackjack <cantidad|all>\`. Puedes apostar cualquier cantidad de tu Cash.`));
   const startResult = economy.startBlackjack(message.author.id, dbUser, bet);
   if (startResult.error === 'already_playing') return message.channel.send(ui.errorCard(cfg, 'Ya tienes una partida abierta', 'Termina tu blackjack actual con los botones antes de iniciar otro.'));
   if (startResult.error === 'insufficient') return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
-  if (startResult.error === 'maxbet') return message.channel.send(ui.errorCard(cfg, 'Apuesta muy alta', `La apuesta máxima es ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}.`));
+  if (startResult.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que un blackjack se mantenga dentro del límite seguro de saldo.'));
   if (startResult.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
   const { game } = startResult;
 
@@ -416,9 +442,10 @@ commands.dice = async (message, args, member, dbUser) => {
   const guess = Number(args[1]);
   if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', `Usa \`${cfg.PREFIX} dice <cantidad> <1-6>\`.`));
   if (!Number.isInteger(guess) || guess < 1 || guess > 6) return message.channel.send(ui.errorCard(cfg, 'Número inválido', `Elige un número entero del 1 al 6: \`${cfg.PREFIX} dice <cantidad> <1-6>\`.`));
-  if (bet > cfg.MAX_BET) return message.channel.send(ui.errorCard(cfg, 'Apuesta muy alta', `La apuesta máxima es ${db.fmt(cfg.MAX_BET)}${cfg.CANDY_EMOJI}.`));
   if (bet > dbUser.cash) return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
   const result = economy.playDice(dbUser, bet, guess);
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
+  if (result.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
   return message.channel.send(ui.diceResultCard(cfg, bet, result));
 };
 
@@ -492,16 +519,21 @@ async function executeBuy(id, dbUser, member, qty) {
   if (eventItem) {
     const alreadyPurchased = Array.isArray(dbUser.eventRolesPurchased)
       && dbUser.eventRolesPurchased.includes(eventItem.roleId);
-    const alreadyHasRole = member && member.roles && member.roles.cache
-      && member.roles.cache.has(eventItem.roleId);
     if (alreadyPurchased) {
-      return ui.infoCard(cfg, 'Ese rol ya fue comprado', 'Cada rol de evento solo se puede comprar una vez por usuario.');
+      return ui.infoCard(cfg, 'Ese rol ya fue comprado', `Abre \`${cfg.PREFIX} eventshop\` y pulsa **Activar** para pagar la mitad restante y habilitar su ingreso.`);
     }
     const result = economy.buyEventRole(new Date(), dbUser, id);
     if (result.error === 'notstarted') return ui.errorCard(cfg, 'El evento no ha comenzado', 'Vuelve el 3 de octubre de 2026.');
     if (result.error === 'ended') return ui.errorCard(cfg, 'El evento ya terminó', 'Gracias por participar. 🎃');
     if (result.error === 'debt') return ui.debtCard(cfg, 'Tienes una deuda pendiente', `Debes pagarle a la Bruja antes de comprar. Usa \`${cfg.PREFIX} paydebt\`.`);
     if (result.error === 'insufficient') return ui.errorCard(cfg, 'No tienes suficientes Candys', `Tienes ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`);
+    if (result.error === 'insufficient_materials') {
+      const missing = result.missingMaterials.map(({ id: materialId, required, have }) => {
+        const material = cfg.MATERIALS.find((item) => item.id === materialId);
+        return `${material ? material.emoji : '🧱'} **${material ? material.name : materialId}**: ${have}/${required}`;
+      }).join('\n');
+      return ui.errorCard(cfg, 'Faltan materiales', `Consíguelos jugando y vuelve a intentarlo:\n${missing}`);
+    }
     if (result.error === 'already_owned') return ui.infoCard(cfg, 'Ese rol ya fue comprado', 'Cada rol de evento solo se puede comprar una vez por usuario.');
     if (result.error) return ui.errorCard(cfg, 'No se pudo comprar', 'Intenta de nuevo.');
     if (!await db.saveDB()) {
@@ -509,23 +541,40 @@ async function executeBuy(id, dbUser, member, qty) {
       await db.saveDB();
       return ui.errorCard(cfg, 'No se pudo guardar la compra', 'La compra fue revertida porque no pude guardarla en la base de datos.');
     }
-    if (!alreadyHasRole) {
-      try {
-        await member.roles.add(result.role.roleId);
-      } catch (err) {
-        console.error('[buy] No se pudo asignar el rol:', err);
-        economy.refundEventRole(dbUser, result.role);
-        await db.saveDB();
-        return ui.errorCard(cfg, 'No se pudo entregar el rol', 'Te devolví tus Candys. Revisa que mi rol esté por encima del rol comprado y que tenga permiso de Gestionar Roles.');
-      }
-    }
-    const status = alreadyHasRole
-      ? 'El rol que ya tenías quedó activado para generar ingresos.'
-      : `Ahora tienes <@&${result.role.roleId}>.`;
-    return ui.successCard(cfg, '¡Beneficio activado!', `${status}\nPagaste **-${db.fmt(result.role.price)}**${cfg.CANDY_EMOJI}. Usa \`${cfg.PREFIX} collect\` cada 24 horas para reclamar el ingreso del rol comprado.`);
+    return ui.successCard(cfg, 'Rol comprado', `Pagaste **-${db.fmt(result.role.price)}**${cfg.CANDY_EMOJI} y entregaste los materiales indicados. Abre \`${cfg.PREFIX} eventshop\` y pulsa **Activar** para pagar **${db.fmt(Math.ceil(result.role.price / 2))}**${cfg.CANDY_EMOJI}, recibir el rol de Discord y habilitar sus ingresos.`);
   }
 
   return ui.errorCard(cfg, 'Item no encontrado', `Revisa el ID con \`${cfg.PREFIX} shop\`, \`${cfg.PREFIX} armory\` o \`${cfg.PREFIX} eventshop\`.`);
+}
+
+async function executeActivateEventRole(id, dbUser, member) {
+  const result = economy.activateEventRole(dbUser, id);
+  if (result.error === 'notfound') return ui.errorCard(cfg, 'Rol no encontrado', 'Actualiza la tienda del evento y vuelve a intentarlo.');
+  if (result.error === 'notstarted') return ui.errorCard(cfg, 'El evento no ha comenzado', 'Podrás activar roles cuando empiece el evento.');
+  if (result.error === 'ended') return ui.infoCard(cfg, 'El evento ya terminó', 'No se pueden activar beneficios nuevos después del evento.');
+  if (result.error === 'not_purchased') return ui.errorCard(cfg, 'Primero debes comprarlo', `Compra el rol y entrega sus materiales desde \`${cfg.PREFIX} eventshop\`.`);
+  if (result.error === 'already_active') return ui.infoCard(cfg, 'El beneficio ya está activo', `Reclama el ingreso con \`${cfg.PREFIX} collect\` cuando termine su cooldown.`);
+  if (result.error === 'debt') return ui.debtCard(cfg, 'Tienes una deuda pendiente', `Debes pagarle a la Bruja antes de activar el beneficio. Usa \`${cfg.PREFIX} paydebt\`.`);
+  if (result.error === 'insufficient') return ui.errorCard(cfg, 'No tienes suficientes Candys', `La activación cuesta **${db.fmt(result.activationCost)}**${cfg.CANDY_EMOJI}; tienes ${db.fmt(dbUser.cash)}.`);
+  if (result.error) return ui.errorCard(cfg, 'No se pudo activar', 'Inténtalo de nuevo desde la tienda.');
+
+  if (!await db.saveDB()) {
+    economy.rollbackEventRoleActivation(dbUser, result.role);
+    await db.saveDB();
+    return ui.errorCard(cfg, 'No se pudo guardar la activación', 'Revertí el cobro porque no pude guardarlo en la base de datos.');
+  }
+  const alreadyHasRole = member?.roles?.cache?.has(result.role.roleId);
+  if (!alreadyHasRole) {
+    try {
+      await member.roles.add(result.role.roleId);
+    } catch (err) {
+      console.error('[shopactivate] No se pudo asignar el rol:', err);
+      economy.rollbackEventRoleActivation(dbUser, result.role);
+      await db.saveDB();
+      return ui.errorCard(cfg, 'No se pudo entregar el rol', 'Revertí el cobro. Revisa que mi rol esté por encima del rol comprado y que tenga permiso para Gestionar Roles.');
+    }
+  }
+  return ui.successCard(cfg, 'Beneficio activado', `${alreadyHasRole ? 'Tu rol de Discord ya estaba asignado.' : `Recibiste <@&${result.role.roleId}>.`}\nPagaste **-${db.fmt(result.activationCost)}**${cfg.CANDY_EMOJI}. Ya puedes usar \`${cfg.PREFIX} collect\` con el cooldown específico de este rol.`);
 }
 
 commands.buy = async (message, args, member, dbUser) => {
@@ -580,13 +629,13 @@ commands.collect = async (message, args, member, dbUser) => {
   if (result.error === 'notstarted') return message.channel.send(ui.errorCard(cfg, 'El evento aún no comienza', 'Los ingresos por roles se activan el 3 de octubre de 2026.'));
   if (result.error === 'ended') return message.channel.send(ui.infoCard(cfg, 'El evento terminó', 'Ya no se pueden reclamar ingresos de roles de este evento.'));
   if (result.error === 'no_eligible_role') {
-    return message.channel.send(ui.errorCard(cfg, 'Beneficio sin activar', `Compra el rol desde \`${cfg.PREFIX} eventshop\` para activar sus ingresos. Tener el rol en Discord por sí solo no activa el beneficio.`));
+    return message.channel.send(ui.errorCard(cfg, 'Beneficio sin activar', `Compra los materiales y el rol desde \`${cfg.PREFIX} eventshop\`, y luego paga la activación. Tener el rol en Discord por sí solo no activa sus ingresos.`));
   }
   if (result.error === 'cooldown') {
-    return message.channel.send(ui.errorCard(cfg, 'Ya reclamaste el ingreso', `El ingreso del rol se puede reclamar una vez por cuenta cada 24 horas. Vuelve en ${db.formatDuration(result.remaining)}.`));
+    return message.channel.send(ui.errorCard(cfg, 'Ya reclamaste el ingreso', `El cooldown de este rol termina en ${db.formatDuration(result.remaining)}.`));
   }
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'No se pudo reclamar', 'El ingreso configurado no es válido. Avísale al equipo del bot.'));
-  return message.channel.send(ui.successCard(cfg, 'Ingreso del evento reclamado', `Tu rol **${result.role.name}** te entregó **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.\nSolo se cobra el mejor rol comprado; el ingreso no se acumula y vuelve en 24 horas.`));
+  return message.channel.send(ui.successCard(cfg, 'Ingreso del evento reclamado', `Tu rol **${result.role.name}** te entregó **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.\nEl ingreso se puede reclamar otra vez en **${db.formatDuration(result.cooldownMs)}**.${activityNotice(result.activity)}`));
 };
 
 commands.cooldowns = async (message, args, member, dbUser) => {
@@ -597,10 +646,20 @@ commands.cooldowns = async (message, args, member, dbUser) => {
     ['dungeon', '🗺️ Dungeon'], ['boss', '🎃 Boss'], ['quest', '📜 Quest'],
     ['roulette', '🎡 Roulette'], ['wheel', '🎡 Wheel'], ['bounty', '🎯 Bounty'],
   ];
-  const lines = keys.map(([k, label]) => {
-    const remaining = db.getCooldownRemaining(dbUser, k);
-    return remaining > 0 ? `${label}: **${db.formatDuration(remaining)}**` : `${label}: ✅ Disponible`;
-  });
+  const lines = keys.map(([key, label]) => ({
+    label: label.replace(/^[^\s]+\s/, ''),
+    emoji: label.match(/^[^\s]+/)?.[0],
+    remaining: db.getCooldownRemaining(dbUser, key),
+  }));
+  if (dbUser.activeQuest) {
+    lines.push({
+      label: 'Quest',
+      emoji: '📜',
+      remaining: 0,
+      status: 'progress',
+      detail: `${dbUser.activeQuest.progress || 0}/${dbUser.activeQuest.target} · ${dbUser.activeQuest.description}`,
+    });
+  }
   return message.channel.send(ui.cooldownsContainer(cfg, member, lines));
 };
 
@@ -658,20 +717,17 @@ commands.setdebt = async (message, args, member, dbUser) => {
   return message.channel.send(ui.successCard(cfg, 'Deuda actualizada', `La deuda de **${targetMember.displayName}** ahora es **${db.fmt(targetData.debt)}**${cfg.CANDY_EMOJI}.`));
 };
 
-commands.givepotion = async (message, args) => {
-  if (!isOwner(message)) return message.channel.send(ownerOnlyCard());
-  const targetMember = message.mentions.members?.first();
-  if (!targetMember) return message.channel.send(ui.errorCard(cfg, 'Falta el usuario', `Usa \`${cfg.PREFIX} givepotion @usuario <id> [cantidad]\`.`));
-  const rest = stripMentionArgs(args);
-  const potionId = (rest[0] || '').toLowerCase();
-  const potion = cfg.POTIONS.find((p) => p.id === potionId);
-  if (!potion) return message.channel.send(ui.errorCard(cfg, 'Poción no encontrada', `Revisa los IDs con \`${cfg.PREFIX} potions\`.`));
-  const qtyRaw = rest[1] === undefined ? 1 : Number(rest[1]);
-  if (!Number.isSafeInteger(qtyRaw) || qtyRaw < 1 || qtyRaw > 99) return message.channel.send(ui.errorCard(cfg, 'Cantidad inválida', 'La cantidad debe estar entre 1 y 99.'));
-  const qty = qtyRaw;
-  const targetData = db.getUser(targetMember.id);
-  db.addInventory(targetData, potionId, qty);
-  return message.channel.send(ui.successCard(cfg, 'Poción entregada', `Le diste ${potion.emoji} **${potion.name}** x${qty} a **${targetMember.displayName}**.`));
+commands.redeemcode = async (message, args, member, dbUser) => {
+  const code = (args[0] || '').trim();
+  if (!code) return message.channel.send(ui.errorCard(cfg, 'Falta el código', `Usa \`${cfg.PREFIX} redeem-code <código>\` o \`${cfg.PREFIX} rc <código>\` (disponible desde nivel 10).`));
+  const result = await economy.redeemCode(message.author.id, dbUser, code);
+  if (result.error === 'level_required') return message.channel.send(ui.errorCard(cfg, 'Código bloqueado', `Necesitas llegar al nivel **${result.level}**. Tu nivel actual es **${db.getLevel(dbUser.xp)}**.`));
+  if (result.error === 'notfound') return message.channel.send(ui.errorCard(cfg, 'Código no válido', 'Revisa el código y vuelve a intentarlo.'));
+  if (result.error === 'expired') return message.channel.send(ui.errorCard(cfg, 'Código vencido', 'Este código ya no se puede canjear.'));
+  if (result.error === 'already_redeemed') return message.channel.send(ui.infoCard(cfg, 'Código ya canjeado', 'Cada código se puede usar una sola vez por cuenta.'));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande', 'El premio excedería el máximo de saldo seguro.'));
+  if (result.error) return message.channel.send(ui.errorCard(cfg, 'No se pudo canjear', result.error === 'storage' ? 'No pude guardar el canje; no se entregó la recompensa.' : 'Inténtalo de nuevo más tarde.'));
+  return message.channel.send(ui.successCard(cfg, 'Código canjeado', `**${result.code}** te entregó **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.`));
 };
 
 commands.resetuser = async (message, args) => {
@@ -703,7 +759,8 @@ const ALIASES = {
   rm: 'removecandy',
   sd: 'setdebt',
   reset: 'resetuser',
-  give: 'givepotion',
+  rc: 'redeemcode',
+  'redeem-code': 'redeemcode',
   arm: 'armory',
   dg: 'dungeon',
   pd: 'paydebt',
@@ -807,6 +864,19 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.update(ui.helpContainer(cfg, action, allowedId));
     }
 
+    if (ns === 'classpick') {
+      if (!checkButtonOwner(interaction, allowedId)) return;
+      const dbUser = db.getUser(allowedId);
+      const result = economy.setClass(dbUser, action);
+      if (result.error === 'level_required') {
+        return interaction.update(ui.errorCard(cfg, 'Clase bloqueada', `Necesitas llegar al nivel ${result.level} para elegir una clase.`));
+      }
+      if (result.error) {
+        return interaction.update(ui.classListContainer(cfg, dbUser, allowedId));
+      }
+      return interaction.update(ui.classListContainer(cfg, dbUser, allowedId));
+    }
+
     if (ns === 'top') {
       if (!checkButtonOwner(interaction, allowedId)) return;
       const parts = action.split('-');
@@ -833,6 +903,15 @@ client.on('interactionCreate', async (interaction) => {
       } else if (cfg.WEAPONS.some((item) => item.id === action)) {
         await interaction.message.edit(ui.armoryContainer(cfg, dbUser, allowedId)).catch(() => {});
       }
+      return interaction.editReply(resultPayload);
+    }
+
+    if (ns === 'shopactivate') {
+      if (!checkButtonOwner(interaction, allowedId)) return;
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
+      const dbUser = db.getUser(allowedId);
+      const resultPayload = await executeActivateEventRole(action, dbUser, interaction.member);
+      await interaction.message.edit(ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser)).catch(() => {});
       return interaction.editReply(resultPayload);
     }
 
@@ -889,19 +968,37 @@ client.on('interactionCreate', async (interaction) => {
         const result = economy.resolveDuel(challengerData, challengerId, targetData, allowedId, bet);
         if (result.error) {
           economy.cancelDuelChallenge(allowedId);
-          return interaction.update(ui.errorCard(cfg, 'No se pudo realizar el duelo', 'Alguno de los dos ya no tiene suficiente Cash.'));
+          return interaction.update(ui.errorCard(cfg, 'No se pudo realizar el duelo', result.error === 'balance_limit'
+            ? 'El premio excedería el límite seguro de saldo.'
+            : 'Alguno de los dos ya no tiene suficiente Cash.'));
         }
         const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
         if (!challengerMember) {
           return interaction.update(ui.infoCard(cfg, 'Duelo resuelto', 'El resultado se calculó, pero no pude cargar el perfil del retador.'));
         }
-        return interaction.update(ui.duelResultCard(cfg, challengerMember, interaction.member, result));
+        const narration = cfg.DUEL_NARRATIONS[Math.floor(Math.random() * cfg.DUEL_NARRATIONS.length)];
+        await interaction.update(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, 0));
+        for (const frame of [1, 2]) {
+          await new Promise((resolve) => setTimeout(resolve, 650));
+          await interaction.message.edit(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, frame)).catch(() => {});
+        }
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        return interaction.message.edit(ui.duelResultCard(
+          cfg,
+          challengerMember,
+          interaction.member,
+          result,
+          `${narration}${activityNotice(result.winnerActivity)}`,
+        )).catch(() => {});
       }
     }
 
     if (ns === 'confirm' && action === 'reset') {
       if (interaction.user.id !== cfg.OWNER_ID) {
-        return interaction.reply({ content: 'Solo el dueño del bot puede confirmar esto.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({
+          ...ui.errorCard(cfg, 'Solo el dueño del bot', 'No se hicieron cambios.'),
+          flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        });
       }
       db.resetUser(allowedId);
       return interaction.update(ui.successCard(cfg, 'Usuario reiniciado', `El perfil económico de <@${allowedId}> fue reiniciado.`));
@@ -909,14 +1006,20 @@ client.on('interactionCreate', async (interaction) => {
 
     if (ns === 'cancel' && action === 'reset') {
       if (interaction.user.id !== cfg.OWNER_ID) {
-        return interaction.reply({ content: 'Solo el dueño del bot puede cancelar esto.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({
+          ...ui.errorCard(cfg, 'Solo el dueño del bot', 'No se hicieron cambios.'),
+          flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        });
       }
       return interaction.update(ui.infoCard(cfg, 'Cancelado', 'No se hicieron cambios.'));
     }
   } catch (err) {
     console.error('[interactionCreate] Error:', err);
     try {
-      const errPayload = { content: 'Ocurrió un error inesperado.', flags: MessageFlags.Ephemeral };
+      const errPayload = {
+        ...ui.errorCard(cfg, 'Ocurrió un error inesperado', 'Inténtalo de nuevo; si se repite, avísale al equipo del bot.'),
+        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+      };
       if (interaction.deferred || interaction.replied) await interaction.followUp(errPayload);
       else await interaction.reply(errPayload);
     } catch (_) { /* noop */ }
@@ -952,6 +1055,16 @@ process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 // does not expose bot data or accept writes.
 if (process.env.PORT) {
   healthServer = http.createServer((request, response) => {
+    if (request.url === '/admin' || request.url.startsWith('/admin/') || request.url.startsWith('/admin?')) {
+      void dashboard.handleAdminRequest(request, response, { cfg, db, client, ui }).catch((err) => {
+        console.error('[Dashboard] Error al procesar una solicitud:', err.message);
+        if (!response.headersSent) {
+          response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        }
+        if (!response.writableEnded) response.end('Internal server error');
+      });
+      return;
+    }
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(serviceReady ? 200 : 503, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end(serviceReady ? 'ok' : 'starting');
