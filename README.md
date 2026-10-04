@@ -44,8 +44,9 @@ del evento.
 `paydebt` (`pd`) · `bounty` (`bnt`) · `leaderboard` (`top`) · `serverstats`
 (`stats`) · `cooldowns` (`cd`) · `inventory` (`inv`, acepta `@usuario`)
 
-**Ganancia (10):** `work` · `crime` · `beg` · `scavenge` (`scav`) · `harvest` ·
-`candyraid` (`raid`) · `daily` · `collect` · `trickortreat` (`tot`) · `rob`
+**Ganancia (11):** `work` · `crime` · `beg` · `scavenge` (`scav`) · `harvest` ·
+`candyraid` (`raid`) · `daily` · `collect` · `trickortreat` (`tot`) · `rob` ·
+`redeem-code` (`rc`, disponible desde nivel 10)
 
 **RPG (10):** `class` · `hunt` · `duel` · `dungeon` (`dg`) · `boss` · `quest` ·
 `level` · `achievements` (`ach`) · `armory` (`arm`) · `equip`
@@ -57,8 +58,15 @@ del evento.
 
 **Información (2):** `eventinfo` (`einfo`) · `help`
 
-**Administración (5, solo `OWNER_ID`):** `addcandy` (`add`) · `removecandy`
-(`rm`) · `setdebt` (`sd`) · `givepotion` (`give`) · `resetuser` (`reset`)
+**Administración (4, solo `OWNER_ID`):** `addcandy` (`add`) · `removecandy`
+(`rm`) · `setdebt` (`sd`) · `resetuser` (`reset`)
+
+El dashboard privado en `/admin` permite crear y eliminar códigos con fecha de
+vencimiento, y solicitar un reinicio global. Para habilitarlo, configura
+`DASHBOARD_SECRET` como variable secreta de al menos 32 bytes en el entorno del
+servicio. Los códigos se canjean una sola vez por usuario; el reinicio global
+restablece perfiles, pero conserva los códigos. La confirmación del reinicio
+requiere un token de un solo uso enviado por DM al dueño del bot.
 
 `xn help` muestra las categorías y controles. `balance`, `profile` e
 `inventory` consultan al usuario mencionado cuando se usa `@usuario`.
@@ -71,13 +79,13 @@ privados. Las respuestas normales de comandos de prefijo siguen siendo
 públicas.
 
 El evento corre en UTC desde el **3 de octubre hasta el 9 de noviembre de 2026,
-inclusive**. Tener un rol en Discord no activa por sí solo su ingreso: se debe
-comprar en la tienda del bot durante el evento. Si ya tienes ese rol, el bot no
-lo vuelve a asignar, pero sí cobra el precio para registrar la compra. `xn
-collect` reclama una vez cada 24 horas el ingreso del **mejor rol comprado**;
-no suma los ingresos de varios roles, no guarda reclamos pendientes y tiene un
-límite máximo de 300.000 Candys por reclamo. El último `daily` del evento es el
-9 de noviembre UTC.
+inclusive**. Para activar el beneficio de un rol se compra primero con Candys y
+los materiales que aparecen en la tienda; después se paga la mitad del precio
+para activar el beneficio. Si ya tienes el rol de Discord, no se vuelve a
+asignar al activarlo. `xn collect` reclama el ingreso del **mejor rol activado**;
+no suma roles ni guarda reclamos pendientes. Cada rol tiene su propio monto y
+cooldown, incluido Spooky Season: 369.000 Candys cada 3 días. El último `daily`
+del evento es el 9 de noviembre UTC.
 
 ## Render
 
@@ -89,8 +97,10 @@ Para crearlo desde el panel:
 3. Revisa el Blueprint que Render lee desde `render.yaml` y continúa con
    **Deploy Blueprint**.
 4. Cuando Render pida las variables privadas, completa `BOT_TOKEN` con el token
-   del bot de Discord y `DATABASE_URL` con la URL de conexión de Neon. Escríbelas
-   directamente en Render; nunca las guardes en GitHub ni las pegues en el chat.
+   del bot de Discord, `DATABASE_URL` con la URL de conexión de Neon y
+   `DASHBOARD_SECRET` con un secreto nuevo, aleatorio y de al menos 32 bytes.
+   Escríbelas directamente en Render; nunca las guardes en GitHub ni las pegues
+   en el chat.
 5. Espera a que el servicio aparezca como **Live**. El build ejecuta `npm ci`,
    inicia con `npm start` y el health check usa `/health`.
 
@@ -127,3 +137,4 @@ producción, usuarios concurrentes reales o latencia de red.
 | `economy.js` | Lógica de economía, RPG, casino y tienda |
 | `ui.js` | Mensajes Components V2, menús y botones |
 | `index.js` | Cliente Discord, listeners y comandos |
+| `dashboard.js` | Dashboard privado, gestión de códigos y confirmación de reinicio |

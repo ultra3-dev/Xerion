@@ -167,13 +167,26 @@ function profileCard(cfg, member, dbUser, rank, activePotionLines) {
 
 // ---------- RPG: clases ----------
 
-function classListContainer(cfg, dbUser) {
+function classListContainer(cfg, dbUser, invokerId) {
   const c = container(cfg.COLORS.PURPLE || cfg.COLORS.DEBT);
   c.addTextDisplayComponents(text('# 🎭 Clases de Halloween'));
-  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con \`${cfg.PREFIX} class <id>\` · elección permanente`));
+  const level = dbUser ? db.getLevel(dbUser.xp) : 0;
+  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con un botón o escribe \`${cfg.PREFIX} class <nombre|id>\` · elección permanente`));
   c.addSeparatorComponents(sep());
-  const lines = cfg.CLASSES.map((cl) => `${cl.emoji} **${cl.name}** \`(${cl.id})\`\n${cl.desc}`);
-  c.addTextDisplayComponents(text(lines.join('\n\n')));
+  cfg.CLASSES.forEach((cl) => {
+    const selected = dbUser && dbUser.class === cl.id;
+    const section = new SectionBuilder()
+      .addTextDisplayComponents(text(`${cl.emoji} **${cl.name}** \`(${cl.id})\`${selected ? ' · ✅ Tu clase' : ''}\n${cl.desc}`))
+      .setButtonAccessory(
+        lockedButton('classpick', cl.id, invokerId || '0', selected ? 'Elegida' : 'Elegir', selected ? ButtonStyle.Secondary : ButtonStyle.Primary, selected ? '✅' : '🎭')
+          .setDisabled(!invokerId || !!(dbUser && dbUser.class) || level < 5),
+      );
+    c.addSectionComponents(section);
+  });
+  if (level < 5 && !dbUser?.class) {
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(`🔒 Te falta llegar al nivel 5. Tu nivel actual es **${level}**.`));
+  }
   if (dbUser && dbUser.class) {
     c.addSeparatorComponents(sep());
     const current = economy.classDef(dbUser.class);
@@ -202,7 +215,6 @@ function armoryContainer(cfg, dbUser, invokerId) {
           .setDisabled(owned),
       );
     c.addSectionComponents(section);
-    if (i < cfg.WEAPONS.length - 1) c.addSeparatorComponents(sep());
   });
   return payload(c);
 }
@@ -265,7 +277,18 @@ function duelChallengeCard(cfg, challengerMember, targetMember, bet) {
   return c;
 }
 
-function duelResultCard(cfg, challengerMember, targetMember, result) {
+function duelAnimationCard(cfg, challengerMember, targetMember, bet, narration, frame = 0) {
+  const c = container(cfg.COLORS.GOLD);
+  const frames = ['⚔️ Los combatientes toman posición…', '🛡️ La arena tiembla con el primer choque…', '✨ El golpe decisivo está por llegar…'];
+  c.addTextDisplayComponents(text(`# ⚔️ Duelo — ${challengerMember.displayName} vs. ${targetMember.displayName}`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`${frames[frame % frames.length]}\n\n${narration}`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`Apuesta: **${db.fmt(bet)}**${cfg.CANDY_EMOJI} cada uno · premio: **${db.fmt(bet * 2)}**${cfg.CANDY_EMOJI}`));
+  return payload(c);
+}
+
+function duelResultCard(cfg, challengerMember, targetMember, result, narration = '') {
   const color = result.challengerWins ? cfg.COLORS.SUCCESS : cfg.COLORS.ERROR;
   const c = container(color);
   c.addTextDisplayComponents(text('# ⚔️ Resultado del duelo'));
@@ -274,7 +297,8 @@ function duelResultCard(cfg, challengerMember, targetMember, result) {
   const loser = result.challengerWins ? targetMember : challengerMember;
   c.addTextDisplayComponents(text(
     `🏆 **${winner.displayName}** gana el duelo: **+${db.fmt(result.pot - result.bet)}**${cfg.CANDY_EMOJI}\n`
-    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}`,
+    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}`
+    + (narration ? `\n\n${narration}` : ''),
   ));
   return payload(c);
 }
@@ -335,23 +359,33 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
   cfg.EVENT_SHOP.forEach((r, i) => {
     const roleOwned = !!(member && member.roles && member.roles.cache && member.roles.cache.has(r.roleId));
     const purchased = !!(dbUser && Array.isArray(dbUser.eventRolesPurchased) && dbUser.eventRolesPurchased.includes(r.roleId));
-    const activeBenefit = purchased;
+    const activeBenefit = !!(dbUser && Array.isArray(dbUser.eventRolesActivated) && dbUser.eventRolesActivated.includes(r.roleId));
     const disabled = activeBenefit || !active;
-    const label = activeBenefit ? 'Beneficio activado' : (roleOwned ? 'Activar beneficio' : 'Comprar');
+    const label = activeBenefit ? 'Activado' : (purchased ? 'Activar' : 'Comprar');
+    const action = purchased ? 'shopactivate' : 'shopbuy';
+    const recipe = Object.entries(r.requirements || {})
+      .map(([id, quantity]) => {
+        const material = cfg.MATERIALS.find((item) => item.id === id);
+        return `${material ? material.emoji : '🧱'} ${material ? material.name : id} ×${quantity}`;
+      })
+      .join(' · ');
+    const cooldown = db.formatDuration(r.collectCooldownMs || cfg.COOLDOWNS.collect);
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(
-        `**${i + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya lo tienes, falta activarlo' : ''}\n`
-        + `💰 **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada 24 h`,
+        `**${i + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya tienes el rol; falta comprarlo aquí' : ''}\n`
+        + `🧾 Compra **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🔓 Activación **${db.fmt(Math.ceil(r.price / 2))}**${cfg.CANDY_EMOJI}\n`
+        + `🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada **${cooldown}**\n`
+        + `🧱 ${recipe}`,
       ))
       .setButtonAccessory(
-        lockedButton('shopbuy', r.id, invokerId, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : '🛒')
+        lockedButton(action, r.id, invokerId, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : (purchased ? '🔓' : '🛒'))
           .setDisabled(disabled),
       );
     c.addSectionComponents(section);
     // Components V2 permits at most 40 components total, counting nested
     // section text and accessory buttons. Group roles with fewer separators
     // so the private event-shop reply stays under Discord's limit.
-    if ((i + 1) % 3 === 0 && i < cfg.EVENT_SHOP.length - 1) {
+    if ((i + 1) % 4 === 0 && i < cfg.EVENT_SHOP.length - 1) {
       c.addSeparatorComponents(sep());
     }
   });
@@ -377,6 +411,11 @@ function inventoryContainer(cfg, member, dbUser) {
     }).filter(Boolean);
     c.addTextDisplayComponents(text(lines.join('\n') || 'No tienes pociones guardadas.'));
   }
+  c.addSeparatorComponents(sep());
+  const materialLines = cfg.MATERIALS
+    .map((material) => `${material.emoji} **${material.name}** ×${dbUser.materials?.[material.id] || 0}`)
+    .join('\n');
+  c.addTextDisplayComponents(text(`**🧱 Materials · ${cfg.MATERIALS.length} tipos**\n${materialLines}`));
   c.addSeparatorComponents(sep());
   const activeLines = [];
   for (const p of cfg.POTIONS) {
@@ -405,11 +444,14 @@ function potionsInfoContainer(cfg) {
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text('# 📖 Guía de Pociones'));
   c.addSeparatorComponents(sep());
-  for (const p of cfg.POTIONS) {
+  c.addTextDisplayComponents(text(`Usa \`${cfg.PREFIX} buy <id>\` para comprar y \`${cfg.PREFIX} use <id>\` para activar.`));
+  c.addSeparatorComponents(sep());
+  cfg.POTIONS.forEach((p) => {
     c.addTextDisplayComponents(text(
-      `${p.emoji} **${p.name}** \`(${p.id})\`\n${p.description}\n💰 ${db.fmt(p.price)}${cfg.CANDY_EMOJI} · ⏱️ ${Math.round(p.durationMs / 60000)} min · 📚 máx. ${p.maxStacks} cargas`,
+      `${p.emoji} **${p.name}** \`(${p.id})\`\n${p.description}\n💰 **${db.fmt(p.price)}**${cfg.CANDY_EMOJI} · ⏱️ ${Math.round(p.durationMs / 60000)} min · 📚 máx. ${p.maxStacks} cargas`,
     ));
-  }
+    if (p !== cfg.POTIONS[cfg.POTIONS.length - 1]) c.addSeparatorComponents(sep());
+  });
   return payload(c);
 }
 
@@ -458,8 +500,45 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
 function cooldownsContainer(cfg, member, lines) {
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text(`# ⏱️ Cooldowns de ${member.displayName}`));
+  c.addTextDisplayComponents(text('-# En curso muestra el tiempo exacto; listo significa que puedes volver a usarlo.'));
   c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(lines.join('\n')));
+  const active = lines.filter((item) => typeof item === 'object' && item.status !== 'progress' && item.remaining > 0);
+  const ready = lines.filter((item) => typeof item === 'object' && item.status !== 'progress' && item.remaining <= 0);
+  const progress = lines.filter((item) => typeof item === 'object' && item.status === 'progress');
+  if (!active.length && !ready.length) {
+    if (progress.length) {
+      c.addTextDisplayComponents(text(`**📜 En curso · ${progress.length}**\n${progress.map((item) => `${item.emoji || '📜'} **${item.label}** — ${item.detail}`).join('\n')}`));
+    } else {
+      c.addTextDisplayComponents(text(lines.length ? lines.join('\n') : 'No hay cooldowns ni misiones en curso.'));
+    }
+    return payload(c);
+  }
+  c.addTextDisplayComponents(text(`**⏳ En curso · ${active.length}**\n${active.length
+    ? active.map((item) => `${item.emoji || '⌛'} **${item.label}** — vuelve en **${db.formatDuration(item.remaining)}**`).join('\n')
+    : 'Ninguno. Puedes jugar.'}`));
+  if (progress.length) {
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(`**📜 En curso · ${progress.length}**\n${progress.map((item) => `${item.emoji || '📜'} **${item.label}** — ${item.detail}`).join('\n')}`));
+  }
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`**✅ Listos · ${ready.length}**\n${ready.length
+    ? ready.map((item) => `${item.emoji || '🎃'} **${item.label}**`).join('\n')
+    : 'Tus actividades siguen enfriándose.'}`));
+  return payload(c);
+}
+
+function questCard(cfg, member, quest, { completed = false, reward = 0, gotBonus = false } = {}) {
+  const c = container(completed ? cfg.COLORS.SUCCESS : cfg.COLORS.GOLD);
+  const progress = completed ? quest.target : Math.max(0, quest.progress || 0);
+  c.addTextDisplayComponents(text(`${completed ? '# ✅ Misión completada' : '# 📜 Encargo de la Bruja'}${member ? ` — ${member.displayName}` : ''}`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `**Objetivo:** ${quest.description}\n`
+    + `**Progreso:** \`${progressBar(progress / Math.max(quest.target, 1), 14)}\` **${progress}/${quest.target}**\n`
+    + (completed
+      ? `🎁 Recompensa: **+${db.fmt(reward)}**${cfg.CANDY_EMOJI}${gotBonus ? ' · botín extra incluido' : ''}`
+      : `-# Completa el objetivo usando los comandos del bot. Tu progreso queda guardado.`),
+  ));
   return payload(c);
 }
 
@@ -708,14 +787,15 @@ const HELP_CATEGORIES = {
       + '`harvest` — Cosechar Candys\n'
       + '`candyraid` (`raid`) — Salir de cabalgata de dulces con riesgo\n'
       + '`daily` — Recompensa diaria (¡bono especial el último día del evento!)\n'
-      + '`collect` — Reclamar cada 24 h el ingreso del mejor rol comprado del evento\n'
+      + '`collect` — Reclamar el ingreso del mejor rol activado; cada rol tiene su cooldown\n'
       + '`trickortreat` (`tot`) — Dulce o truco diario\n'
-      + '`rob <@user>` — Intentar robar Candys en efectivo',
+      + '`rob <@user>` — Intentar robar Candys en efectivo\n'
+      + '`redeem-code <código>` (`rc`) — Canjear código desde nivel 10',
   },
   rpg: {
     label: '🐺 RPG', emoji: '🐺',
     text:
-      '`class [id]` — Elegir clase permanente al nivel 5\n'
+      '`class [nombre|id]` — Elegir con botón o nombre/ID, sin distinguir mayúsculas\n'
       + '`hunt` — Cazar una criatura de Halloween\n'
       + '`duel <@user> <cant>` — Retar a un duelo por Candys\n'
       + '`dungeon` (`dg`) — Explorar una mazmorra embrujada\n'
@@ -758,8 +838,8 @@ const HELP_CATEGORIES = {
       + '`addcandy` (`add`) `<@user> <cant>` — Dar Candys\n'
       + '`removecandy` (`rm`) `<@user> <cant>` — Quitar Candys\n'
       + '`setdebt` (`sd`) `<@user> <cant>` — Fijar deuda exacta\n'
-      + '`givepotion` (`give`) `<@user> <id> [cant]` — Regalar una poción\n'
-      + '`resetuser` (`reset`) `<@user>` — Reiniciar el perfil (con confirmación)',
+      + '`resetuser` (`reset`) `<@user>` — Reiniciar el perfil (con confirmación)\n'
+      + 'Dashboard privado — crear códigos con vencimiento y solicitar reinicio global con confirmación por DM.',
   },
 };
 
@@ -792,7 +872,7 @@ module.exports = {
   successCard, errorCard, infoCard, debtCard,
   balanceCard, profileCard,
   classListContainer, armoryContainer, levelCard, achievementsContainer,
-  duelChallengeCard, duelResultCard,
+  duelChallengeCard, duelAnimationCard, duelResultCard, questCard,
   shopContainer, eventShopContainer, inventoryContainer, potionsInfoContainer,
   privateShopPrompt,
   leaderboardContainer, cooldownsContainer, serverStatsContainer,
