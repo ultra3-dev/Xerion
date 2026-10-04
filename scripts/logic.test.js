@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { after, before, test } = require('node:test');
+const { MessageFlags } = require('discord.js');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xerion-logic-test-'));
 process.env.NODE_ENV = 'test';
@@ -322,16 +323,20 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('leaderboard renders saved names or an explicit fallback, never raw user mentions', () => {
+test('global leaderboard renders real user mention tags without sending pings', () => {
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
-    { id: 'known-player', displayName: 'Alice Example', value: 500 },
+    { id: '123456789012345678', displayName: 'Alice Example', value: 500 },
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, /@Alice Example/);
+  assert.match(rendered, /<@123456789012345678>/);
   assert.match(rendered, /@Usuario legacy-player/);
-  assert.doesNotMatch(rendered, /<@(?:known-player|legacy-player)>/);
-  assert.deepEqual(view.allowedMentions, { parse: [] });
+  assert.doesNotMatch(rendered, /<@legacy-player>/);
+  assert.deepEqual(view.allowedMentions, {
+    parse: [],
+    users: ['123456789012345678'],
+  });
+  assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });
 
 test('Discord message and interaction IDs are processed at most once per process', async () => {

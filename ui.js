@@ -513,7 +513,7 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
   const pageEntries = allEntries.slice(startIdx, startIdx + LEADERBOARD_PAGE_SIZE);
 
   const isRich = mode === 'rich';
-  const title = isRich ? '🏆 Top 100 — Más ricos' : '🩸 Top 100 — Más endeudados';
+  const title = isRich ? '🏆 Top 100 global — Más ricos' : '🩸 Top 100 global — Más endeudados';
   const valueLabel = isRich ? '(Total)' : '(Debt)';
   const color = isRich ? cfg.COLORS.GOLD : cfg.COLORS.DEBT;
 
@@ -533,7 +533,9 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
         .replace(/([\\*_`~|])/g, '\\$1')
         .replace(/^@+/, '')
         .replace(/@/g, '@\u200b');
-      return `${marker} **@${displayName}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
+      const userId = String(e.id || '');
+      const userLabel = /^\d{17,20}$/.test(userId) ? `<@${userId}>` : `@${displayName}`;
+      return `${marker} **${userLabel}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
     });
     c.addTextDisplayComponents(text(lines.join('\n')));
   }
@@ -546,7 +548,13 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
     lockedButton('top', `rich-${clampedPage}`, invokerId, 'Ricos', isRich ? ButtonStyle.Primary : ButtonStyle.Secondary, '🏆'),
     lockedButton('top', `debt-${clampedPage}`, invokerId, 'Endeudados', !isRich ? ButtonStyle.Primary : ButtonStyle.Secondary, '🩸'),
   ));
-  return payload(c);
+  const allowedUserIds = pageEntries
+    .map((entry) => String(entry.id || ''))
+    .filter((id) => /^\d{17,20}$/.test(id));
+  return payload(c, {
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.SuppressNotifications,
+    allowedMentions: { parse: [], users: allowedUserIds },
+  });
 }
 
 function cooldownsContainer(cfg, member, lines) {
