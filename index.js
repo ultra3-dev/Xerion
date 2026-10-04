@@ -603,7 +603,7 @@ commands.potions = async (message) => message.channel.send(ui.potionsInfoContain
 commands.inventory = async (message, args, member, dbUser) => {
   const targetMember = message.mentions.members?.first() || member;
   const targetData = targetMember.id === message.author.id ? dbUser : db.getUser(targetMember.id);
-  return message.channel.send(ui.inventoryContainer(cfg, targetMember, targetData));
+  return message.channel.send(ui.inventoryContainer(cfg, targetMember, targetData, message.author.id));
 };
 
 // ---------- Información ----------
@@ -849,6 +849,14 @@ client.on('messageCreate', async (message) => {
     const handler = commands[cmdName];
     if (!handler) return;
 
+    let claimed;
+    try {
+      claimed = await db.claimDiscordEvent('message', message.id);
+    } catch (claimError) {
+      console.error('[command-idempotency] No se pudo reclamar el comando:', claimError.message);
+      return;
+    }
+    if (!claimed) return;
     await handler(message, args, message.member, dbUser);
   } catch (err) {
     console.error('[messageCreate] Error:', err);
@@ -861,7 +869,15 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
   try {
     if (!interaction.isButton()) return;
-    const [ns, action, allowedId] = interaction.customId.split(':');
+    let claimed;
+    try {
+      claimed = await db.claimDiscordEvent('interaction', interaction.id);
+    } catch (claimError) {
+      console.error('[interaction-idempotency] No se pudo reclamar la interacción:', claimError.message);
+      return;
+    }
+    if (!claimed) return;
+    const [ns, action, allowedId, catalogType, pageRaw, targetId] = interaction.customId.split(':');
 
     if (ns === 'shopopen') {
       if (!checkButtonOwner(interaction, allowedId)) return;
@@ -909,15 +925,42 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.update(ui.leaderboardContainer(cfg, mode, page, leaderboardEntriesForGuild(entries, interaction.guild), allowedId));
     }
 
+    if (ns === 'catalog' && action === 'page') {
+      if (!checkButtonOwner(interaction, allowedId)) return;
+      const page = Number.parseInt(pageRaw, 10);
+      const safePage = Number.isInteger(page) ? page : 0;
+      if (catalogType === 'eventshop') {
+        const dbUser = db.getUser(allowedId);
+        return interaction.update(ui.eventShopContainer(
+          cfg, new Date(), interaction.member, allowedId, dbUser, safePage,
+        ));
+      }
+      if (catalogType === 'armory') {
+        return interaction.update(ui.armoryContainer(cfg, db.getUser(allowedId), allowedId, safePage));
+      }
+      if (catalogType === 'inventory') {
+        const inventoryOwnerId = targetId || allowedId;
+        const targetData = db.getUser(inventoryOwnerId);
+        const targetMember = interaction.guild?.members?.cache?.get(inventoryOwnerId)
+          || (inventoryOwnerId === interaction.user.id
+            ? interaction.member
+            : { displayName: targetData.displayName || `Usuario ${inventoryOwnerId}` });
+        return interaction.update(ui.inventoryContainer(
+          cfg, targetMember, targetData, allowedId, safePage,
+        ));
+      }
+    }
+
     if (ns === 'shopbuy') {
       if (!checkButtonOwner(interaction, allowedId)) return;
       await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
       const dbUser = db.getUser(allowedId);
       const resultPayload = await executeBuy(action, dbUser, interaction.member, 1);
+      const catalogPage = Number.parseInt(catalogType, 10) || 0;
       if (cfg.EVENT_SHOP.some((item) => item.id === action)) {
-        await interaction.message.edit(ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser)).catch(() => {});
+        await interaction.message.edit(ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser, catalogPage)).catch(() => {});
       } else if (cfg.WEAPONS.some((item) => item.id === action)) {
-        await interaction.message.edit(ui.armoryContainer(cfg, dbUser, allowedId)).catch(() => {});
+        await interaction.message.edit(ui.armoryContainer(cfg, dbUser, allowedId, catalogPage)).catch(() => {});
       }
       return interaction.editReply(resultPayload);
     }
@@ -927,7 +970,8 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
       const dbUser = db.getUser(allowedId);
       const resultPayload = await executeActivateEventRole(action, dbUser, interaction.member);
-      await interaction.message.edit(ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser)).catch(() => {});
+      const catalogPage = Number.parseInt(catalogType, 10) || 0;
+      await interaction.message.edit(ui.eventShopContainer(cfg, new Date(), interaction.member, allowedId, dbUser, catalogPage)).catch(() => {});
       return interaction.editReply(resultPayload);
     }
 

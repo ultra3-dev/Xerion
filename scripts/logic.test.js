@@ -68,6 +68,42 @@ test('all major Components V2 views stay within Discord’s 40-component limit',
   }
 });
 
+test('inventory only shows owned materials and paginates long material lists', () => {
+  const userId = '123456789012345678';
+  const member = { id: userId, displayName: 'Tester', roles: { cache: { has: () => false } } };
+  const user = db.getUser('inventory-material-pagination-test');
+  const materials = cfg.MATERIALS.slice(0, 13);
+  user.materials = Object.fromEntries(materials.map((material, index) => [material.id, index + 1]));
+
+  const firstPage = JSON.stringify(ui.inventoryContainer(cfg, member, user, userId, 0));
+  const secondPage = JSON.stringify(ui.inventoryContainer(cfg, member, user, userId, 1));
+  assert.match(firstPage, /Amber Dust/);
+  assert.doesNotMatch(firstPage, new RegExp(materials[12].name));
+  assert.match(firstPage, /Página 1 de 2/);
+  assert.match(secondPage, new RegExp(materials[12].name));
+  assert.match(secondPage, /Página 2 de 2/);
+
+  user.materials = {};
+  const emptyInventory = JSON.stringify(ui.inventoryContainer(cfg, member, user, userId));
+  assert.match(emptyInventory, /No tienes materiales todavía/);
+  assert.doesNotMatch(emptyInventory, /×0/);
+});
+
+test('event shop and armory catalogs paginate without exceeding Discord component limits', () => {
+  const userId = '123456789012345678';
+  const member = { id: userId, displayName: 'Tester', roles: { cache: { has: () => false } } };
+  const user = db.getUser('catalog-pagination-test');
+  const eventPage = ui.eventShopContainer(cfg, new Date(cfg.EVENT_START), member, userId, user, 0);
+  const eventPageTwo = ui.eventShopContainer(cfg, new Date(cfg.EVENT_START), member, userId, user, 1);
+  const armoryPage = ui.armoryContainer(cfg, user, userId, 0);
+  assert.match(JSON.stringify(eventPage), /Página 1 de 3/);
+  assert.match(JSON.stringify(eventPageTwo), /Página 2 de 3/);
+  assert.match(JSON.stringify(armoryPage), /catalog:page/);
+  for (const view of [eventPage, eventPageTwo, armoryPage]) {
+    assert.ok(countComponents(view.components) <= 40);
+  }
+});
+
 test('collect pays only the best activated role and applies its configured cooldown', () => {
   const user = db.getUser('collect-test');
   user.eventRolesPurchased = [
@@ -292,9 +328,18 @@ test('leaderboard renders saved names or an explicit fallback, never raw user me
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, /Alice Example/);
-  assert.match(rendered, /Usuario legacy-player/);
+  assert.match(rendered, /@Alice Example/);
+  assert.match(rendered, /@Usuario legacy-player/);
   assert.doesNotMatch(rendered, /<@(?:known-player|legacy-player)>/);
+  assert.deepEqual(view.allowedMentions, { parse: [] });
+});
+
+test('Discord message and interaction IDs are processed at most once per process', async () => {
+  const eventId = '1430000000000000000';
+  assert.equal(await db.claimDiscordEvent('message', eventId), true);
+  assert.equal(await db.claimDiscordEvent('message', eventId), false);
+  assert.equal(await db.claimDiscordEvent('interaction', eventId), true);
+  assert.equal(await db.claimDiscordEvent('interaction', eventId), false);
 });
 
 test('duel acceptance acknowledges before fetching the other member', () => {

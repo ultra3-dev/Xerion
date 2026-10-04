@@ -73,6 +73,35 @@ function lockedButton(namespace, action, allowedId, label, style, emoji) {
   return button(`${namespace}:${action}:${allowedId}`, label, style, emoji);
 }
 
+function addCatalogPagination(c, type, page, totalItems, pageSize, invokerId, targetId = invokerId) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const requestedPage = Number.isFinite(page) ? Math.trunc(page) : 0;
+  const currentPage = db.clamp(requestedPage, 0, totalPages - 1);
+  if (totalPages <= 1 || !invokerId) return currentPage;
+
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`-# Página ${currentPage + 1} de ${totalPages}`));
+  c.addActionRowComponents(row(
+    lockedButton(
+      'catalog',
+      'page',
+      `${invokerId}:${type}:${currentPage - 1}:${targetId}`,
+      'Anterior',
+      ButtonStyle.Secondary,
+      '⬅️',
+    ).setDisabled(currentPage <= 0),
+    lockedButton(
+      'catalog',
+      'page',
+      `${invokerId}:${type}:${currentPage + 1}:${targetId}`,
+      'Siguiente',
+      ButtonStyle.Primary,
+      '➡️',
+    ).setDisabled(currentPage >= totalPages - 1),
+  ));
+  return currentPage;
+}
+
 // ---------- Tarjetas genéricas (éxito / error / info / deuda) ----------
 
 function card(color, title, body, footer) {
@@ -199,23 +228,30 @@ function classListContainer(cfg, dbUser, invokerId) {
 
 // ---------- RPG: armería ----------
 
-function armoryContainer(cfg, dbUser, invokerId) {
+function armoryContainer(cfg, dbUser, invokerId, page = 0) {
   const c = container(cfg.COLORS.DARK);
   c.addTextDisplayComponents(text('# ⚔️ Armería Embrujada'));
   c.addTextDisplayComponents(text(`-# Compra con el botón · equipa con \`${cfg.PREFIX} equip <id>\` (permanente, un arma a la vez)`));
   c.addSeparatorComponents(sep());
-  cfg.WEAPONS.forEach((w, i) => {
+  const pageSize = 4;
+  const totalPages = Math.max(1, Math.ceil(cfg.WEAPONS.length / pageSize));
+  const currentPage = db.clamp(Number.isFinite(page) ? Math.trunc(page) : 0, 0, totalPages - 1);
+  const start = currentPage * pageSize;
+  cfg.WEAPONS.slice(start, start + pageSize).forEach((w, i, pageWeapons) => {
+    const weaponIndex = start + i;
     const owned = db.hasWeapon(dbUser, w.id);
     const equipped = dbUser.equippedWeapon === w.id;
     const tag = equipped ? ' `equipada`' : (owned ? ' `en tu poder`' : '');
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(`${w.emoji} **${w.name}**${tag}\n${w.desc}\n💰 **${db.fmt(w.price)}**${cfg.CANDY_EMOJI}`))
       .setButtonAccessory(
-        lockedButton('shopbuy', w.id, invokerId, owned ? 'Comprada' : 'Comprar', owned ? ButtonStyle.Secondary : ButtonStyle.Success, owned ? '✅' : '🛒')
+        lockedButton('shopbuy', w.id, `${invokerId}:${currentPage}`, owned ? 'Comprada' : 'Comprar', owned ? ButtonStyle.Secondary : ButtonStyle.Success, owned ? '✅' : '🛒')
           .setDisabled(owned),
       );
     c.addSectionComponents(section);
+    if (i < pageWeapons.length - 1 || weaponIndex < cfg.WEAPONS.length - 1) c.addSeparatorComponents(sep());
   });
+  addCatalogPagination(c, 'armory', currentPage, cfg.WEAPONS.length, pageSize, invokerId);
   return payload(c);
 }
 
@@ -346,7 +382,7 @@ function privateShopPrompt(cfg, shopType, invokerId) {
 // nombre y color reales, el payload() de este archivo ya fuerza
 // allowedMentions a no incluir "roles", así que nadie recibe notificación.
 
-function eventShopContainer(cfg, now, member, invokerId, dbUser) {
+function eventShopContainer(cfg, now, member, invokerId, dbUser, page = 0) {
   const c = container(cfg.COLORS.GOLD);
   let status;
   const active = now >= cfg.EVENT_START && now < cfg.EVENT_END;
@@ -356,7 +392,12 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
   c.addTextDisplayComponents(text('# 🎃 Tienda del Evento de Halloween'));
   c.addTextDisplayComponents(text(status));
   c.addSeparatorComponents(sep());
-  cfg.EVENT_SHOP.forEach((r, i) => {
+  const pageSize = 3;
+  const totalPages = Math.max(1, Math.ceil(cfg.EVENT_SHOP.length / pageSize));
+  const currentPage = db.clamp(Number.isFinite(page) ? Math.trunc(page) : 0, 0, totalPages - 1);
+  const start = currentPage * pageSize;
+  cfg.EVENT_SHOP.slice(start, start + pageSize).forEach((r, i, pageRoles) => {
+    const roleIndex = start + i;
     const roleOwned = !!(member && member.roles && member.roles.cache && member.roles.cache.has(r.roleId));
     const purchased = !!(dbUser && Array.isArray(dbUser.eventRolesPurchased) && dbUser.eventRolesPurchased.includes(r.roleId));
     const activeBenefit = !!(dbUser && Array.isArray(dbUser.eventRolesActivated) && dbUser.eventRolesActivated.includes(r.roleId));
@@ -372,23 +413,19 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
     const cooldown = db.formatDuration(r.collectCooldownMs || cfg.COOLDOWNS.collect);
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(
-        `**${i + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya tienes el rol; falta comprarlo aquí' : ''}\n`
+        `**${roleIndex + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya tienes el rol; falta comprarlo aquí' : ''}\n`
         + `🧾 Compra **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🔓 Activación **${db.fmt(Math.ceil(r.price / 2))}**${cfg.CANDY_EMOJI}\n`
         + `🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada **${cooldown}**\n`
         + `🧱 ${recipe}`,
       ))
       .setButtonAccessory(
-        lockedButton(action, r.id, invokerId, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : (purchased ? '🔓' : '🛒'))
+        lockedButton(action, r.id, `${invokerId}:${currentPage}`, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : (purchased ? '🔓' : '🛒'))
           .setDisabled(disabled),
       );
     c.addSectionComponents(section);
-    // Components V2 permits at most 40 components total, counting nested
-    // section text and accessory buttons. Group roles with fewer separators
-    // so the private event-shop reply stays under Discord's limit.
-    if ((i + 1) % 4 === 0 && i < cfg.EVENT_SHOP.length - 1) {
-      c.addSeparatorComponents(sep());
-    }
+    if (i < pageRoles.length - 1) c.addSeparatorComponents(sep());
   });
+  addCatalogPagination(c, 'eventshop', currentPage, cfg.EVENT_SHOP.length, pageSize, invokerId);
   c.addSeparatorComponents(sep());
   c.addActionRowComponents(row(linkButton(cfg.EVENT_INVITE_URL, 'Ver evento en Discord', '🔗')));
   return payload(c);
@@ -396,9 +433,9 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
 
 // ---------- Inventario ----------
 
-function inventoryContainer(cfg, member, dbUser) {
+function inventoryContainer(cfg, member, dbUser, invokerId = member?.id, page = 0) {
   const c = container(cfg.COLORS.DEFAULT);
-  c.addTextDisplayComponents(text(`# 🎒 Inventario de ${member.displayName}`));
+  c.addTextDisplayComponents(text(`# 🎒 Inventario de ${member?.displayName || 'Usuario'}`));
   c.addSeparatorComponents(sep());
   const owned = Object.entries(dbUser.inventory || {}).filter(([, qty]) => qty > 0);
   if (!owned.length) {
@@ -412,10 +449,20 @@ function inventoryContainer(cfg, member, dbUser) {
     c.addTextDisplayComponents(text(lines.join('\n') || 'No tienes pociones guardadas.'));
   }
   c.addSeparatorComponents(sep());
-  const materialLines = cfg.MATERIALS
-    .map((material) => `${material.emoji} **${material.name}** ×${dbUser.materials?.[material.id] || 0}`)
+  const ownedMaterials = cfg.MATERIALS
+    .map((material) => ({ ...material, quantity: Number(dbUser.materials?.[material.id] || 0) }))
+    .filter((material) => Number.isFinite(material.quantity) && material.quantity > 0);
+  const materialPageSize = 12;
+  const materialPageCount = Math.max(1, Math.ceil(ownedMaterials.length / materialPageSize));
+  const materialPage = db.clamp(Number.isFinite(page) ? Math.trunc(page) : 0, 0, materialPageCount - 1);
+  const visibleMaterials = ownedMaterials.slice(materialPage * materialPageSize, (materialPage + 1) * materialPageSize);
+  const materialLines = visibleMaterials
+    .map((material) => `${material.emoji} **${material.name}** ×${material.quantity}`)
     .join('\n');
-  c.addTextDisplayComponents(text(`**🧱 Materials · ${cfg.MATERIALS.length} tipos**\n${materialLines}`));
+  c.addTextDisplayComponents(text(ownedMaterials.length
+    ? `**🧱 Materiales · ${ownedMaterials.length} en tu inventario**\n${materialLines}`
+    : '**🧱 Materiales**\nNo tienes materiales todavía. Consíguelos jugando.'));
+  addCatalogPagination(c, 'inventory', materialPage, ownedMaterials.length, materialPageSize, invokerId, member?.id || invokerId);
   c.addSeparatorComponents(sep());
   const activeLines = [];
   for (const p of cfg.POTIONS) {
@@ -484,8 +531,9 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
       const displayName = String(e.displayName || `Usuario ${e.id}`)
         .replace(/[\r\n]+/g, ' ')
         .replace(/([\\*_`~|])/g, '\\$1')
+        .replace(/^@+/, '')
         .replace(/@/g, '@\u200b');
-      return `${marker} **${displayName}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
+      return `${marker} **@${displayName}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
     });
     c.addTextDisplayComponents(text(lines.join('\n')));
   }

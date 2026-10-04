@@ -9,6 +9,7 @@ const PG_TABLE = 'public.xerion_economy_users';
 const PG_CODE_TABLE = 'public.xerion_redeem_codes';
 const PG_REDEMPTION_TABLE = 'public.xerion_redeem_redemptions';
 const PG_RESET_TOKEN_TABLE = 'public.xerion_dashboard_reset_tokens';
+const PG_DISCORD_EVENT_TABLE = 'public.xerion_processed_discord_events';
 
 let db = { users: {}, redeemCodes: {}, redeemRedemptions: {}, resetTokens: {} };
 let dirty = false;
@@ -23,6 +24,7 @@ const operationWaiters = [];
 const dirtyUserIds = new Set();
 const persistedSnapshots = new Map();
 const userIds = new WeakMap();
+const claimedDiscordEventIds = new Set();
 
 // ---------- Persistencia ----------
 
@@ -236,6 +238,20 @@ async function loadDB() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
     );
+    await postgresPool.query(
+      `CREATE TABLE IF NOT EXISTS ${PG_DISCORD_EVENT_TABLE} (
+        event_id TEXT PRIMARY KEY,
+        processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    );
+    await postgresPool.query(
+      `CREATE INDEX IF NOT EXISTS xerion_processed_discord_events_processed_at_idx
+       ON ${PG_DISCORD_EVENT_TABLE} (processed_at)`,
+    );
+    await postgresPool.query(
+      `DELETE FROM ${PG_DISCORD_EVENT_TABLE}
+       WHERE processed_at < NOW() - INTERVAL '7 days'`,
+    );
     const result = await postgresPool.query(`SELECT user_id, user_data FROM ${PG_TABLE}`);
     db = { users: {} };
     dirty = false;
@@ -297,6 +313,30 @@ async function closeDB() {
     postgresPool = null;
     await pool.end();
   }
+}
+
+async function claimDiscordEvent(eventType, eventId) {
+  const id = `${eventType}:${String(eventId || '')}`;
+  if (!/^(message|interaction):\d{1,32}$/.test(id)) return false;
+  return withCriticalOperation(async () => {
+    if (postgresEnabled && postgresPool) {
+      const result = await postgresPool.query(
+        `INSERT INTO ${PG_DISCORD_EVENT_TABLE} (event_id)
+         VALUES ($1)
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [id],
+      );
+      return result.rowCount === 1;
+    }
+
+    if (claimedDiscordEventIds.has(id)) return false;
+    claimedDiscordEventIds.add(id);
+    while (claimedDiscordEventIds.size > 5000) {
+      claimedDiscordEventIds.delete(claimedDiscordEventIds.values().next().value);
+    }
+    return true;
+  });
 }
 
 // ---------- Usuarios ----------
@@ -919,6 +959,7 @@ function addWeapon(user, weaponId) {
 
 module.exports = {
   loadDB, saveDB, closeDB, markDirty, startAutoSave,
+  claimDiscordEvent,
   getUser, getAllUsers, getTotal, resetUser,
   createRedeemCode, listRedeemCodes, deleteRedeemCode, redeemCode,
   createResetToken, deleteResetToken, consumeResetTokenAndResetAll,
