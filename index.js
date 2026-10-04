@@ -524,7 +524,7 @@ async function executeBuy(id, dbUser, member, qty) {
       return ui.infoCard(cfg, 'Ese rol ya fue comprado', `Abre \`${cfg.PREFIX} eventshop\` y pulsa **Activar** para pagar la mitad restante y habilitar su ingreso.`);
     }
     const result = economy.buyEventRole(new Date(), dbUser, id);
-    if (result.error === 'notstarted') return ui.errorCard(cfg, 'El evento no ha comenzado', 'Vuelve el 3 de octubre de 2026.');
+    if (result.error === 'notstarted') return ui.errorCard(cfg, 'El evento no ha comenzado', `Vuelve el <t:${Math.floor(cfg.EVENT_START.getTime() / 1000)}:F>.`);
     if (result.error === 'ended') return ui.errorCard(cfg, 'El evento ya terminó', 'Gracias por participar. 🎃');
     if (result.error === 'debt') return ui.debtCard(cfg, 'Tienes una deuda pendiente', `Debes pagarle a la Bruja antes de comprar. Usa \`${cfg.PREFIX} paydebt\`.`);
     if (result.error === 'insufficient') return ui.errorCard(cfg, 'No tienes suficientes Candys', `Tienes ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`);
@@ -637,7 +637,7 @@ commands.daily = async (message, args, member, dbUser) => {
 
 commands.collect = async (message, args, member, dbUser) => {
   const result = economy.collectEventIncome(dbUser);
-  if (result.error === 'notstarted') return message.channel.send(ui.errorCard(cfg, 'El evento aún no comienza', 'Los ingresos por roles se activan el 3 de octubre de 2026.'));
+  if (result.error === 'notstarted') return message.channel.send(ui.errorCard(cfg, 'El evento aún no comienza', `Los ingresos por roles se activan el <t:${Math.floor(cfg.EVENT_START.getTime() / 1000)}:F>.`));
   if (result.error === 'ended') return message.channel.send(ui.infoCard(cfg, 'El evento terminó', 'Ya no se pueden reclamar ingresos de roles de este evento.'));
   if (result.error === 'no_eligible_role') {
     return message.channel.send(ui.errorCard(cfg, 'Beneficio sin activar', `Compra los materiales y el rol desde \`${cfg.PREFIX} eventshop\`, y luego paga la activación. Tener el rol en Discord por sí solo no activa sus ingresos.`));

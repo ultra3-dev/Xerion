@@ -553,11 +553,12 @@ function recordActivity(user, action) {
   return { materials, questProgress };
 }
 
-// Mismo día calendario (UTC) que el fin del evento: la recompensa diaria se
-// vuelve el regalo de cierre del evento.
+// La recompensa diaria especial solo se entrega en el último día UTC del evento
+// y antes del instante exacto de cierre.
 function isEventFinaleDay(now) {
   const end = new Date(cfg.EVENT_END.getTime() - 1);
-  return now.getUTCFullYear() === end.getUTCFullYear()
+  return now < cfg.EVENT_END
+    && now.getUTCFullYear() === end.getUTCFullYear()
     && now.getUTCMonth() === end.getUTCMonth()
     && now.getUTCDate() === end.getUTCDate();
 }
