@@ -138,6 +138,10 @@ function noticeFor(value) {
     code_deleted: ['Código eliminado.', 'ok'],
     reset_sent: ['Envié un token de confirmación por DM al dueño del bot. Vence en 10 minutos.', 'ok'],
     reset_done: ['Reinicio global completado. Se reiniciaron los perfiles indicados.', 'ok'],
+    world_event_started: ['Evento mundial iniciado en el canal configurado.', 'ok'],
+    world_event_active: ['Ya hay un evento mundial activo o iniciándose.', 'error'],
+    world_event_channel: ['No pude encontrar el canal configurado para el evento.', 'error'],
+    world_event_failed: ['No pude iniciar el evento. No se anunció.', 'error'],
     invalid: ['No se pudo completar la operación. Revisa los datos y vuelve a intentarlo.', 'error'],
     storage: ['No pude guardar el cambio. No se confirmó la operación.', 'error'],
     dm_failed: ['No pude enviar el DM de confirmación; no se creó un token utilizable.', 'error'],
@@ -146,7 +150,7 @@ function noticeFor(value) {
   return notices[value] || null;
 }
 
-function dashboardPage(session, records, userCount, queryNotice = '') {
+function dashboardPage(session, records, userCount, worldEventActive, queryNotice = '') {
   const noticeInfo = noticeFor(queryNotice);
   const notice = noticeInfo
     ? `<div class="notice ${noticeInfo[1]}">${escapeHtml(noticeInfo[0])}</div>`
@@ -158,6 +162,9 @@ function dashboardPage(session, records, userCount, queryNotice = '') {
 <td><form method="post" action="/admin/codes/delete" onsubmit="return confirm('¿Eliminar este código? Los canjes futuros dejarán de funcionar.')">
 ${csrfField(session)}<input type="hidden" name="code" value="${escapeHtml(record.normalizedCode)}"><button class="danger" type="submit">Eliminar</button></form></td></tr>`).join('')
     : '<tr><td colspan="4">No hay códigos creados.</td></tr>';
+  const worldEventStatus = worldEventActive
+    ? '<strong>Hay un evento activo o iniciándose.</strong> Espera a que termine antes de lanzar otro.'
+    : 'No hay ningún evento en curso.';
   const content = `<div class="inline"><div><h1>🎃 Xerion Admin</h1><p>Sesión privada · solo el propietario del bot debe usar este panel.</p></div>
 <form method="post" action="/admin/logout">${csrfField(session)}<button type="submit">Cerrar sesión</button></form></div>
 ${notice}
@@ -169,6 +176,10 @@ ${notice}
 <label for="reward">Recompensa en Candys</label><input id="reward" name="reward" type="number" min="1" step="1" required>
 <label for="expiry-local">Vence el</label><input id="expiry-local" name="expiresLocal" type="datetime-local" required>
 <input id="expires-at" name="expiresAt" type="hidden"><button type="submit">Crear código</button></form></section>
+<section class="panel"><h2>Evento mundial</h2><p>${worldEventStatus}</p>
+<p>Al iniciarlo, Xerion anunciará el evento en el canal configurado y comenzará la ventana de participación de 60 segundos.</p>
+<form method="post" action="/admin/world-event/spawn" onsubmit="return confirm('¿Iniciar ahora un evento mundial en el canal configurado?')">
+${csrfField(session)}<button type="submit"${worldEventActive ? ' disabled' : ''}>Iniciar evento ahora</button></form></section>
 <section class="panel"><h2>Códigos de canje</h2><div class="table-wrap"><table><thead><tr><th>Código</th><th>Premio</th><th>Vencimiento · hora de Bogotá</th><th></th></tr></thead><tbody>${codeRows}</tbody></table></div></section>
 <section class="panel"><h2>Reinicio global</h2><p class="danger-text"><strong>Acción irreversible:</strong> restablece los perfiles económicos de todos los usuarios. No elimina los códigos del dashboard.</p>
 <form method="post" action="/admin/reset/start" onsubmit="return confirm('Se enviará por DM al dueño un token de un solo uso para confirmar el reinicio. ¿Continuar?')">
@@ -202,7 +213,7 @@ function isLoginLimited(request) {
   return state.count >= 10;
 }
 
-async function handleAdminRequest(request, response, { cfg, db, client, ui }) {
+async function handleAdminRequest(request, response, { cfg, db, client, ui, spawnWorldEvent, getWorldEventStatus }) {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname !== '/admin' && !url.pathname.startsWith('/admin/')) return false;
 
@@ -214,7 +225,10 @@ async function handleAdminRequest(request, response, { cfg, db, client, ui }) {
     try {
       const records = await db.listRedeemCodes();
       const userCount = Object.keys(db.getAllUsers()).length;
-      return sendHtml(response, 200, dashboardPage(session, records, userCount, url.searchParams.get('notice') || ''));
+      const worldEventActive = typeof getWorldEventStatus === 'function' && getWorldEventStatus();
+      return sendHtml(response, 200, dashboardPage(
+        session, records, userCount, Boolean(worldEventActive), url.searchParams.get('notice') || '',
+      ));
     } catch (err) {
       console.error('[Dashboard] No se pudo cargar el panel:', err.message);
       return sendHtml(response, 503, page('Error', '<h1>Panel temporalmente no disponible</h1><p>La base de datos no respondió. Inténtalo de nuevo más tarde.</p>'));
@@ -263,6 +277,20 @@ async function handleAdminRequest(request, response, { cfg, db, client, ui }) {
       const result = await db.deleteRedeemCode(form.code);
       if (result.error === 'storage') return redirect(response, '/admin?notice=storage');
       return redirect(response, `/admin?notice=${result.deleted ? 'code_deleted' : 'invalid'}`);
+    }
+
+    if (url.pathname === '/admin/world-event/spawn') {
+      if (typeof spawnWorldEvent !== 'function') return redirect(response, '/admin?notice=world_event_failed');
+      try {
+        const result = await spawnWorldEvent();
+        if (result?.ok) return redirect(response, '/admin?notice=world_event_started');
+        if (result?.error === 'already_active') return redirect(response, '/admin?notice=world_event_active');
+        if (result?.error === 'channel_unavailable') return redirect(response, '/admin?notice=world_event_channel');
+        return redirect(response, '/admin?notice=world_event_failed');
+      } catch (err) {
+        console.error('[Dashboard] No se pudo iniciar el evento mundial:', err.message);
+        return redirect(response, '/admin?notice=world_event_failed');
+      }
     }
 
     if (url.pathname === '/admin/reset/start') {

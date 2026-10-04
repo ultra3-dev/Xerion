@@ -1090,6 +1090,10 @@ function isWorldEventActive() {
   return !!worldEvent && Date.now() < worldEvent.endsAt;
 }
 
+function hasWorldEvent() {
+  return !!worldEvent;
+}
+
 function registerWorldEventParticipant(channelId, userId) {
   if (isWorldEventActive() && worldEvent.channelId === channelId) {
     worldEvent.participants.add(userId);
@@ -1106,6 +1110,12 @@ function startWorldEvent(channelId, template) {
     template,
   };
   return worldEvent;
+}
+
+function cancelWorldEvent() {
+  if (!worldEvent) return false;
+  worldEvent = null;
+  return true;
 }
 
 function resolveWorldEvent() {
@@ -1150,5 +1160,6 @@ module.exports = {
   buyPotion, buyEventRole, activateEventRole, usePotion, refundEventRole, rollbackEventRoleActivation, collectEventIncome,
   redeemCode, recordActivity,
   getLeaderboard, getDebtLeaderboard, getRank, getServerStats, getLevelInfo,
-  isWorldEventActive, registerWorldEventParticipant, startWorldEvent, resolveWorldEvent,
+  isWorldEventActive, hasWorldEvent, registerWorldEventParticipant,
+  startWorldEvent, cancelWorldEvent, resolveWorldEvent,
 };

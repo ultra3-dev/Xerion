@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,6 +26,36 @@ function countComponents(value) {
   let total = typeof value.type === 'number' ? 1 : 0;
   for (const child of Object.values(value)) total += countComponents(child);
   return total;
+}
+
+async function sendDashboardRequest({ method, url, cookie = '', body = '' }, dependencies) {
+  const request = new EventEmitter();
+  request.method = method;
+  request.url = url;
+  request.headers = { cookie };
+  request.socket = { remoteAddress: '203.0.113.25' };
+
+  const response = {
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value; },
+    writeHead(status, headers = {}) {
+      this.statusCode = status;
+      Object.assign(this.headers, headers);
+      this.headersSent = true;
+    },
+    end(bodyText = '') {
+      this.body = bodyText;
+      this.writableEnded = true;
+    },
+  };
+
+  const pending = dashboard.handleAdminRequest(request, response, dependencies);
+  if (body) {
+    request.emit('data', Buffer.from(body));
+    request.emit('end');
+  }
+  await pending;
+  return response;
 }
 
 before(async () => {
@@ -86,6 +117,11 @@ test('world events run every 90 minutes and cap payouts with one 39k winner', ()
     assert.equal(soloResult.rewards.length, 1);
     assert.equal(soloResult.rewards[0].amount, 39000);
     assert.equal(soloResult.totalReward, 39000);
+
+    economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, { title: 'Evento cancelable', description: 'Prueba.' });
+    assert.equal(economy.hasWorldEvent(), true);
+    assert.equal(economy.cancelWorldEvent(), true);
+    assert.equal(economy.hasWorldEvent(), false);
   } finally {
     Math.random = originalRandom;
   }
@@ -298,8 +334,8 @@ test('gameplay activities award their configured XP and dungeon XP requires a cl
     const clearUser = db.getUser('dungeon-xp-clear-test');
     const clear = economy.doDungeon(clearUser);
     assert.equal(clear.success, true);
-    assert.equal(clear.activity.xp, 67);
-    assert.equal(clearUser.xp, 67);
+    assert.equal(clear.activity.xp, 80);
+    assert.equal(clearUser.xp, 80);
 
     Math.random = () => 0.99;
     const failedUser = db.getUser('dungeon-xp-fail-test');
@@ -388,6 +424,86 @@ test('dashboard does not expose its admin page without a session', async () => {
   assert.equal(response.statusCode, 200);
   assert.match(response.body, /type="password"/);
   assert.equal(response.headers['Cache-Control'], 'no-store');
+});
+
+test('dashboard can spawn a world event only from an authenticated CSRF-protected admin session', async () => {
+  const previousSecret = process.env.DASHBOARD_SECRET;
+  const secret = 'dashboard-event-test-secret-1234567890';
+  process.env.DASHBOARD_SECRET = secret;
+  let spawnCalls = 0;
+  const dependencies = {
+    cfg,
+    db,
+    client: {},
+    ui,
+    getWorldEventStatus: () => false,
+    spawnWorldEvent: async () => {
+      spawnCalls += 1;
+      return { ok: true };
+    },
+  };
+
+  try {
+    const login = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/login',
+      body: new URLSearchParams({ secret }).toString(),
+    }, dependencies);
+    assert.equal(login.statusCode, 303);
+    const cookie = login.headers['Set-Cookie'].split(';', 1)[0];
+
+    const panel = await sendDashboardRequest({ method: 'GET', url: '/admin', cookie }, dependencies);
+    assert.equal(panel.statusCode, 200);
+    assert.match(panel.body, /action="\/admin\/world-event\/spawn"/);
+    assert.match(panel.body, /Iniciar evento ahora/);
+    const csrf = panel.body.match(/name="csrf" value="([a-f0-9]+)"/)?.[1];
+    assert.ok(csrf);
+
+    const unauthorized = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      body: new URLSearchParams({ csrf }).toString(),
+    }, dependencies);
+    assert.equal(unauthorized.headers.Location, '/admin');
+    assert.equal(spawnCalls, 0);
+
+    const invalidCsrf = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf: 'invalid' }).toString(),
+    }, dependencies);
+    assert.equal(invalidCsrf.headers.Location, '/admin?notice=bad_csrf');
+    assert.equal(spawnCalls, 0);
+
+    const spawned = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf }).toString(),
+    }, dependencies);
+    assert.equal(spawned.headers.Location, '/admin?notice=world_event_started');
+    assert.equal(spawnCalls, 1);
+
+    const activeDependencies = {
+      ...dependencies,
+      getWorldEventStatus: () => true,
+      spawnWorldEvent: async () => ({ error: 'already_active' }),
+    };
+    const activePanel = await sendDashboardRequest({ method: 'GET', url: '/admin', cookie }, activeDependencies);
+    assert.match(activePanel.body, /Hay un evento activo o iniciándose/);
+    assert.match(activePanel.body, /<button type="submit" disabled>/);
+    const alreadyActive = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf }).toString(),
+    }, activeDependencies);
+    assert.equal(alreadyActive.headers.Location, '/admin?notice=world_event_active');
+  } finally {
+    if (previousSecret === undefined) delete process.env.DASHBOARD_SECRET;
+    else process.env.DASHBOARD_SECRET = previousSecret;
+  }
 });
 
 test('work and harvest keep distinct 5-minute and 3-minute intervals; rob waits 10 minutes', () => {

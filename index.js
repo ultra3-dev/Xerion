@@ -787,23 +787,46 @@ const ALIASES = {
 
 // ---------- Evento mundial aleatorio ----------
 
+let worldEventStarting = false;
+
+async function spawnWorldEvent() {
+  if (worldEventStarting || economy.hasWorldEvent()) return { error: 'already_active' };
+  worldEventStarting = true;
+  let eventStarted = false;
+  try {
+    const channel = await client.channels.fetch(cfg.WORLD_EVENT_CHANNEL_ID).catch(() => null);
+    if (!channel || typeof channel.send !== 'function') {
+      console.error('[WorldEvent] No se pudo encontrar el canal configurado.');
+      return { error: 'channel_unavailable' };
+    }
+
+    const template = cfg.WORLD_EVENT_TEMPLATES[Math.floor(Math.random() * cfg.WORLD_EVENT_TEMPLATES.length)];
+    economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, template);
+    eventStarted = true;
+    await channel.send(ui.worldEventStartCard(cfg, template));
+    setTimeout(async () => {
+      try {
+        const result = economy.resolveWorldEvent();
+        if (result) await channel.send(ui.worldEventResultCard(cfg, result));
+      } catch (err) {
+        console.error('[WorldEvent] Error al resolver:', err);
+      }
+    }, cfg.WORLD_EVENT_DURATION_MS);
+    return { ok: true };
+  } catch (err) {
+    if (eventStarted) economy.cancelWorldEvent();
+    console.error('[WorldEvent] Error al iniciar:', err);
+    return { error: 'delivery_failed' };
+  } finally {
+    worldEventStarting = false;
+  }
+}
+
 function scheduleWorldEvents() {
   setInterval(async () => {
     try {
-      if (economy.isWorldEventActive()) return;
-      const channel = await client.channels.fetch(cfg.WORLD_EVENT_CHANNEL_ID).catch(() => null);
-      if (!channel) return;
-      const template = cfg.WORLD_EVENT_TEMPLATES[Math.floor(Math.random() * cfg.WORLD_EVENT_TEMPLATES.length)];
-      economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, template);
-      await channel.send(ui.worldEventStartCard(cfg, template));
-      setTimeout(async () => {
-        try {
-          const result = economy.resolveWorldEvent();
-          if (result) await channel.send(ui.worldEventResultCard(cfg, result));
-        } catch (err) {
-          console.error('[WorldEvent] Error al resolver:', err);
-        }
-      }, cfg.WORLD_EVENT_DURATION_MS);
+      if (economy.hasWorldEvent() || worldEventStarting) return;
+      await spawnWorldEvent();
     } catch (err) {
       console.error('[WorldEvent] Error:', err);
     }
@@ -1119,7 +1142,14 @@ process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 if (process.env.PORT) {
   healthServer = http.createServer((request, response) => {
     if (request.url === '/admin' || request.url.startsWith('/admin/') || request.url.startsWith('/admin?')) {
-      void dashboard.handleAdminRequest(request, response, { cfg, db, client, ui }).catch((err) => {
+      void dashboard.handleAdminRequest(request, response, {
+        cfg,
+        db,
+        client,
+        ui,
+        spawnWorldEvent,
+        getWorldEventStatus: () => worldEventStarting || economy.hasWorldEvent(),
+      }).catch((err) => {
         console.error('[Dashboard] Error al procesar una solicitud:', err.message);
         if (!response.headersSent) {
           response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });

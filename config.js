@@ -214,8 +214,8 @@ module.exports = {
 
   // --- RPG: experiencia y nivel ---
   XP_PER_ACTION: {
-    work: 2, beg: 1, crime: 2, hunt: 3, dungeon: 67, boss: 4, duel: 2, quest: 4, rob: 2,
-    scavenge: 2, candyraid: 2, harvest: 2, trickortreat: 1, daily: 2, collect: 2,
+    work: 3, beg: 2, crime: 3, hunt: 4, dungeon: 80, boss: 5, duel: 3, quest: 5, rob: 3,
+    scavenge: 3, candyraid: 3, harvest: 3, trickortreat: 2, daily: 3, collect: 3,
   },
 
   // --- RPG: clases permanentes (se eligen una vez al llegar al nivel 5) ---
