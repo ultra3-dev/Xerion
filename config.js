@@ -1,5 +1,30 @@
 'use strict';
 
+const QUEST_TARGETS = [1, 2, 3, 4, 5, 7];
+const QUEST_ACTIONS = [
+  { action: 'work', verb: 'trabajar con `Xn work`' },
+  { action: 'harvest', verb: 'cosechar con `Xn harvest`' },
+  { action: 'scavenge', verb: 'buscar en `Xn scavenge`' },
+  { action: 'hunt', verb: 'cazar con `Xn hunt`' },
+  { action: 'crime', verb: 'intentar un `Xn crime`' },
+  { action: 'candyraid', verb: 'participar en `Xn candyraid`' },
+  { action: 'dungeon', verb: 'explorar con `Xn dungeon`' },
+  { action: 'boss', verb: 'enfrentar al jefe con `Xn boss`' },
+  { action: 'beg', verb: 'pedir ayuda con `Xn beg`' },
+  { action: 'trickortreat', verb: 'jugar `Xn trickortreat`' },
+  { action: 'daily', verb: 'reclamar `Xn daily`' },
+  { action: 'collect', verb: 'reclamar ingresos con `Xn collect`' },
+  { action: 'duel', verb: 'participar en `Xn duel`' },
+  { action: 'rob', verb: 'intentar robar con `Xn rob`' },
+  { action: 'quest', verb: 'entregar una misión con `Xn quest`' },
+];
+const QUEST_MISSIONS = QUEST_ACTIONS.flatMap(({ action, verb }) => QUEST_TARGETS.map((target) => ({
+  id: `${action}_${target}`,
+  action,
+  target,
+  description: `Completa ${target} ${target === 1 ? 'acción' : 'acciones'}: ${verb}.`,
+})));
+
 // ============================================================
 //  CONFIGURACIÓN GENERAL — Bot de Economía de Halloween (Xn)
 //  v1.0.0 Halloween Release — RPG + RNG + Economy, 50 comandos.
@@ -67,7 +92,7 @@ module.exports = {
     roulette: 10 * 60 * 1000,
     wheel: 10 * 60 * 1000,
     harvest: 15 * 60 * 1000,
-    collect: 24 * 60 * 60 * 1000,
+    collect: 3 * 24 * 60 * 60 * 1000,
   },
 
   // Enfriamiento corto entre usos y descanso largo al completar el ciclo.
@@ -172,6 +197,55 @@ module.exports = {
   QUEST_BONUS_CHANCE: 0.15,
   QUEST_BONUS_MIN: 50,
   QUEST_BONUS_MAX: 200,
+  QUEST_MISSIONS,
+
+  // --- Materiales (nombres para el jugador en inglés; 39 en total) ---
+  MATERIALS: [
+    { id: 'ash', name: 'Ash', weight: 10 },
+    { id: 'bat_wing', name: 'Bat Wing', weight: 8 },
+    { id: 'bone_shard', name: 'Bone Shard', weight: 8 },
+    { id: 'candy_corn', name: 'Candy Corn', weight: 10 },
+    { id: 'cursed_thread', name: 'Cursed Thread', weight: 6 },
+    { id: 'dark_feather', name: 'Dark Feather', weight: 6 },
+    { id: 'ectoplasm', name: 'Ectoplasm', weight: 5 },
+    { id: 'ember_dust', name: 'Ember Dust', weight: 6 },
+    { id: 'fang', name: 'Fang', weight: 8 },
+    { id: 'ghost_mushroom', name: 'Ghost Mushroom', weight: 7 },
+    { id: 'grave_soil', name: 'Grave Soil', weight: 9 },
+    { id: 'haunted_leaf', name: 'Haunted Leaf', weight: 9 },
+    { id: 'iron_nail', name: 'Iron Nail', weight: 8 },
+    { id: 'jack_o_lantern_pulp', name: "Jack-o'-Lantern Pulp", weight: 7 },
+    { id: 'moonstone', name: 'Moonstone', weight: 2 },
+    { id: 'phantom_ink', name: 'Phantom Ink', weight: 4 },
+    { id: 'pumpkin_seed', name: 'Pumpkin Seed', weight: 10 },
+    { id: 'raven_feather', name: 'Raven Feather', weight: 5 },
+    { id: 'shadow_essence', name: 'Shadow Essence', weight: 3 },
+    { id: 'silver_dust', name: 'Silver Dust', weight: 4 },
+    { id: 'spider_silk', name: 'Spider Silk', weight: 8 },
+    { id: 'spirit_crystal', name: 'Spirit Crystal', weight: 2 },
+    { id: 'sugar_crystal', name: 'Sugar Crystal', weight: 9 },
+    { id: 'witch_herb', name: 'Witch Herb', weight: 7 },
+    { id: 'zombie_flesh', name: 'Zombie Flesh', weight: 5 },
+    { id: 'black_candle', name: 'Black Candle', weight: 5 },
+    { id: 'blood_ruby', name: 'Blood Ruby', weight: 2 },
+    { id: 'cobweb', name: 'Cobweb', weight: 9 },
+    { id: 'crypt_key', name: 'Crypt Key', weight: 3 },
+    { id: 'dreadstone', name: 'Dreadstone', weight: 3 },
+    { id: 'elderwood', name: 'Elderwood', weight: 4 },
+    { id: 'frosted_candy', name: 'Frosted Candy', weight: 7 },
+    { id: 'grave_marble', name: 'Grave Marble', weight: 4 },
+    { id: 'hollow_glass', name: 'Hollow Glass', weight: 5 },
+    { id: 'lantern_oil', name: 'Lantern Oil', weight: 8 },
+    { id: 'midnight_bloom', name: 'Midnight Bloom', weight: 3 },
+    { id: 'nightshade', name: 'Nightshade', weight: 3 },
+    { id: 'skull_fragment', name: 'Skull Fragment', weight: 4 },
+    { id: 'witch_seal', name: "Witch's Seal", weight: 1 },
+  ],
+  MATERIAL_DROP_CHANCES: {
+    work: 0.22, beg: 0.10, scavenge: 0.35, harvest: 0.28, candyraid: 0.24,
+    trickortreat: 0.18, crime: 0.20, rob: 0.20, hunt: 0.28, dungeon: 0.35,
+    boss: 0.35, duel: 0.22, daily: 0.25, collect: 0.25, quest: 0.30,
+  },
 
   // --- daily ---
   DAILY_REWARD_MIN: 300,
@@ -279,7 +353,6 @@ module.exports = {
   ],
 
   // --- Casino (Spooky Gamble) ---
-  MAX_BET: 3000,
   GAMBLE_WIN_CHANCE: 0.47,
   SLOTS_SYMBOLS: [
     { symbol: '🎃', weight: 30 },
@@ -370,17 +443,17 @@ module.exports = {
 
   // --- Tienda del Evento (roles) ---
   EVENT_SHOP: [
-    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 250000 },
-    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 200000 },
-    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 150000 },
-    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 100000 },
-    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 75000 },
-    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 50000 },
-    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 30000 },
-    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 15000 },
-    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 5000 },
+    { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 369000, collectCooldownMs: 72 * 60 * 60 * 1000, materials: { moonstone: 2, shadow_essence: 4, spirit_crystal: 3, witch_seal: 1 } },
+    { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 200000, collectCooldownMs: 48 * 60 * 60 * 1000, materials: { phantom_ink: 3, blood_ruby: 2, crypt_key: 3, nightshade: 3, skull_fragment: 3 } },
+    { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 150000, collectCooldownMs: 36 * 60 * 60 * 1000, materials: { raven_feather: 4, silver_dust: 4, dark_feather: 4, dreadstone: 3 } },
+    { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 100000, collectCooldownMs: 24 * 60 * 60 * 1000, materials: { ectoplasm: 5, bat_wing: 5, cursed_thread: 5, iron_nail: 5 } },
+    { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 75000, collectCooldownMs: 18 * 60 * 60 * 1000, materials: { black_candle: 6, grave_marble: 6, midnight_bloom: 4, cobweb: 6 } },
+    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 50000, collectCooldownMs: 12 * 60 * 60 * 1000, materials: { pumpkin_seed: 7, ember_dust: 7, elderwood: 6, hollow_glass: 6 } },
+    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 30000, collectCooldownMs: 8 * 60 * 60 * 1000, materials: { candy_corn: 8, sugar_crystal: 8, haunted_leaf: 8, lantern_oil: 7 } },
+    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 15000, collectCooldownMs: 6 * 60 * 60 * 1000, materials: { bone_shard: 9, ghost_mushroom: 9, jack_o_lantern_pulp: 9, witch_herb: 9 } },
+    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 5000, collectCooldownMs: 3 * 60 * 60 * 1000, materials: { ash: 10, fang: 10, grave_soil: 10, spider_silk: 10, zombie_flesh: 8, frosted_candy: 8 } },
   ],
-  EVENT_COLLECT_REWARD_CAP: 300000,
+  EVENT_COLLECT_REWARD_CAP: 369000,
   // Horas en UTC a propósito: así el evento empieza/termina igual sin importar
   // en qué zona horaria esté el servidor donde corra el bot (ej. Render = UTC).
   EVENT_START: new Date('2026-10-03T00:00:00Z'),
