@@ -170,7 +170,7 @@ function profileCard(cfg, member, dbUser, rank, activePotionLines) {
 function classListContainer(cfg, dbUser) {
   const c = container(cfg.COLORS.PURPLE || cfg.COLORS.DEBT);
   c.addTextDisplayComponents(text('# 🎭 Clases de Halloween'));
-  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con \`${cfg.PREFIX} class <id>\` · elección permanente`));
+  c.addTextDisplayComponents(text(`-# Desbloquea en nivel 5 · elige con \`${cfg.PREFIX} class <id o nombre>\` · acepta mayúsculas/minúsculas · elección permanente`));
   c.addSeparatorComponents(sep());
   const lines = cfg.CLASSES.map((cl) => `${cl.emoji} **${cl.name}** \`(${cl.id})\`\n${cl.desc}`);
   c.addTextDisplayComponents(text(lines.join('\n\n')));
@@ -202,7 +202,7 @@ function armoryContainer(cfg, dbUser, invokerId) {
           .setDisabled(owned),
       );
     c.addSectionComponents(section);
-    if (i < cfg.WEAPONS.length - 1) c.addSeparatorComponents(sep());
+    if ((i + 1) % 3 === 0 && i < cfg.WEAPONS.length - 1) c.addSeparatorComponents(sep());
   });
   return payload(c);
 }
@@ -274,7 +274,26 @@ function duelResultCard(cfg, challengerMember, targetMember, result) {
   const loser = result.challengerWins ? targetMember : challengerMember;
   c.addTextDisplayComponents(text(
     `🏆 **${winner.displayName}** gana el duelo: **+${db.fmt(result.pot - result.bet)}**${cfg.CANDY_EMOJI}\n`
-    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}`,
+    + `💀 **${loser.displayName}** pierde su apuesta: **-${db.fmt(result.bet)}**${cfg.CANDY_EMOJI}\n\n`
+    + `🎬 ${result.ending || 'El combate terminó.'}`
+    + (result.material ? `\n🧱 ${winner.displayName} encontró **${result.material.qty} ${result.material.name}**.` : ''),
+  ));
+  return payload(c);
+}
+
+function duelAnimationCard(cfg, challengerMember, targetMember, frame) {
+  const frames = [
+    'Los combatientes se colocan frente a frente…',
+    'Un destello cruza la arena…',
+    'La multitud contiene el aliento…',
+    'Un último movimiento decide el duelo…',
+  ];
+  const c = container(cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text('# ⚔️ Duelo en curso'));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `**${challengerMember.displayName}**  ⚔️  **${targetMember.displayName}**\n\n`
+    + `${frames[Math.min(frame, frames.length - 1)]}`,
   ));
   return payload(c);
 }
@@ -341,7 +360,8 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser) {
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(
         `**${i + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya lo tienes, falta activarlo' : ''}\n`
-        + `💰 **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada 24 h`,
+        + `💰 **${db.fmt(r.price)}**${cfg.CANDY_EMOJI}${roleOwned && !purchased ? ' para activar' : ''} · 🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} cada ${Math.round(r.collectCooldownMs / (60 * 60 * 1000))} h\n`
+        + `🧱 Materiales: ${Object.entries(r.materials || {}).map(([id, qty]) => `${qty} ${(cfg.MATERIALS.find((item) => item.id === id) || { name: id }).name}`).join(', ')}`,
       ))
       .setButtonAccessory(
         lockedButton('shopbuy', r.id, invokerId, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : '🛒')
@@ -377,6 +397,19 @@ function inventoryContainer(cfg, member, dbUser) {
     }).filter(Boolean);
     c.addTextDisplayComponents(text(lines.join('\n') || 'No tienes pociones guardadas.'));
   }
+  const materials = Object.entries(dbUser.materials || {})
+    .filter(([, qty]) => Number.isFinite(qty) && qty > 0)
+    .map(([id, qty]) => ({
+      name: (cfg.MATERIALS.find((item) => item.id === id) || { name: id }).name,
+      qty,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    materials.length
+      ? `**🧱 Materiales (${materials.length})**\n${materials.map((item) => `• ${item.name}: **${db.fmt(item.qty)}**`).join('\n')}`
+      : '**🧱 Materiales**\nAún no tienes materiales. Consíguelos jugando.',
+  ));
   c.addSeparatorComponents(sep());
   const activeLines = [];
   for (const p of cfg.POTIONS) {
@@ -460,6 +493,8 @@ function cooldownsContainer(cfg, member, lines) {
   c.addTextDisplayComponents(text(`# ⏱️ Cooldowns de ${member.displayName}`));
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(lines.join('\n')));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text('-# Los usos de cada ciclo se muestran entre paréntesis; después del último uso aplica el descanso largo.'));
   return payload(c);
 }
 
@@ -690,13 +725,14 @@ const HELP_CATEGORIES = {
       + '`deposit` (`dep`) `<cant|all>` — Guardar Candys en el banco\n'
       + '`withdraw` (`with`) `<cant|all>` — Sacar del banco (comisión hasta 10%)\n'
       + '`pay <@user> <cant|all>` — Enviar Candys a alguien\n'
-      + '`debt` — Ver el detalle de tu deuda\n'
+      + '`debt [@usuario|ID]` — Consultar tu deuda o la de otra persona\n'
       + '`paydebt` (`pd`) `[cant]` — Pagarle a la bruja\n'
       + '`bounty` (`bnt`) `<@user> <cant>` — Poner precio a su cabeza\n'
       + '`leaderboard` (`top`) — Top 100 con botones: página y ricos/endeudados\n'
       + '`serverstats` (`stats`) — Estadísticas del servidor\n'
       + '`cooldowns` (`cd`) — Tus tiempos de espera\n'
-      + '`inventory` (`inv`) `[usuario]` — Pociones, efectos y armas',
+      + '`inventory` (`inv`) `[usuario]` — Pociones, materiales, efectos y armas\n'
+      + '`redeem` (`rc`) `<código>` — Canjear Candys desde nivel 10',
   },
   ganancia: {
     label: '💼 Ganancia', emoji: '💼',
@@ -708,19 +744,19 @@ const HELP_CATEGORIES = {
       + '`harvest` — Cosechar Candys\n'
       + '`candyraid` (`raid`) — Salir de cabalgata de dulces con riesgo\n'
       + '`daily` — Recompensa diaria (¡bono especial el último día del evento!)\n'
-      + '`collect` — Reclamar cada 24 h el ingreso del mejor rol comprado del evento\n'
+      + '`collect` — Reclamar ingresos; el cooldown depende del nivel del rol\n'
       + '`trickortreat` (`tot`) — Dulce o truco diario\n'
       + '`rob <@user>` — Intentar robar Candys en efectivo',
   },
   rpg: {
     label: '🐺 RPG', emoji: '🐺',
     text:
-      '`class [id]` — Elegir clase permanente al nivel 5\n'
+      '`class [id o nombre]` — Elegir clase permanente al nivel 5 (no distingue mayúsculas)\n'
       + '`hunt` — Cazar una criatura de Halloween\n'
-      + '`duel <@user> <cant>` — Retar a un duelo por Candys\n'
+      + '`duel <@user> <cant|all>` — Retar a un duelo por Candys\n'
       + '`dungeon` (`dg`) — Explorar una mazmorra embrujada\n'
       + '`boss` — Enfrentar a La Calabaza Ancestral\n'
-      + '`quest` — Misión de la Bruja\n'
+      + '`quest` — Aceptar y completar misiones únicas de la Bruja\n'
       + '`level` — Ver tu nivel y experiencia\n'
       + '`achievements` (`ach`) — Ver tus logros\n'
       + '`armory` (`arm`) — Tienda de armas\n'
@@ -729,10 +765,10 @@ const HELP_CATEGORIES = {
   casino: {
     label: '🎰 Casino Espeluznante', emoji: '🎰',
     text:
-      '`gamble <cant>` (`sg`) — Doble o nada contra la bruja\n'
-      + '`slots <cant>` — Tragamonedas embrujada\n'
-      + '`blackjack <cant>` (`bj`) — Blackjack visual con botones\n'
-      + '`dice <cant> <1-6>` — Adivina el dado (paga x5)\n'
+      '`gamble <cant|all>` (`sg`) — Doble o nada contra la bruja, sin máximo\n'
+      + '`slots <cant|all>` — Tragamonedas embrujada, sin máximo\n'
+      + '`blackjack <cant|all>` (`bj`) — Blackjack visual con botones, sin máximo\n'
+      + '`dice <cant|all> <1-6>` — Adivina el dado (paga x5), sin máximo\n'
       + '`roulette <cant|all> <color>` — Ruleta (red, black, purple, green); mínimo, sin máximo y con animación\n'
       + '`wheel <cant|all>` — Rueda animada, sin máximo, con mínimo y cooldown',
   },
@@ -758,8 +794,8 @@ const HELP_CATEGORIES = {
       + '`addcandy` (`add`) `<@user> <cant>` — Dar Candys\n'
       + '`removecandy` (`rm`) `<@user> <cant>` — Quitar Candys\n'
       + '`setdebt` (`sd`) `<@user> <cant>` — Fijar deuda exacta\n'
-      + '`givepotion` (`give`) `<@user> <id> [cant]` — Regalar una poción\n'
-      + '`resetuser` (`reset`) `<@user>` — Reiniciar el perfil (con confirmación)',
+      + '`resetuser` (`reset`) `<@user>` — Reiniciar un perfil (con confirmación)\n'
+      + 'Dashboard web: gestionar códigos y solicitar reinicio global con contraseña + código por DM.',
   },
 };
 
@@ -792,7 +828,7 @@ module.exports = {
   successCard, errorCard, infoCard, debtCard,
   balanceCard, profileCard,
   classListContainer, armoryContainer, levelCard, achievementsContainer,
-  duelChallengeCard, duelResultCard,
+  duelChallengeCard, duelAnimationCard, duelResultCard,
   shopContainer, eventShopContainer, inventoryContainer, potionsInfoContainer,
   privateShopPrompt,
   leaderboardContainer, cooldownsContainer, serverStatsContainer,
