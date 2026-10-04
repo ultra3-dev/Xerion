@@ -55,10 +55,6 @@ module.exports = {
     DARK: 0x2C2F33,
   },
 
-  // --- Ganancia pasiva por mensaje ---
-  MESSAGE_COOLDOWN_MS: 3 * 1000, // bajado de 10s a 3s
-  MESSAGE_REWARD: 1,
-
   // --- Límite de ganancias de acciones normales (no limita las apuestas) ---
   MAX_SINGLE_GAIN: 3000,
 
@@ -373,8 +369,8 @@ module.exports = {
     },
     {
       id: 'greed', name: 'Poción de la Codicia', emoji: '🕷️',
-      price: 100000, durationMs: 20 * 60 * 1000, maxStacks: 2, perStack: 1,
-      description: 'Ganas Candys extra por cada mensaje que escribes, por carga (máx. 2).',
+      price: 100000, durationMs: 20 * 60 * 1000, maxStacks: 2, perStack: 0.10,
+      description: 'Aumenta un **10%** las recompensas de `work` y `scavenge` por carga (máx. 2).',
     },
     {
       id: 'ghost', name: 'Susurro Fantasmal', emoji: '👻',

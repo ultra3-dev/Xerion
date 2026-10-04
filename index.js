@@ -608,8 +608,20 @@ commands.inventory = async (message, args, member, dbUser) => {
 
 // ---------- Información ----------
 
+function leaderboardEntriesForGuild(entries, guild) {
+  return entries.map((entry) => {
+    const member = guild?.members?.cache?.get(entry.id);
+    const user = client.users.cache.get(entry.id);
+    const savedName = db.getUser(entry.id).displayName;
+    return {
+      ...entry,
+      displayName: member?.displayName || user?.globalName || user?.username || savedName || `Usuario ${entry.id}`,
+    };
+  });
+}
+
 commands.leaderboard = async (message) => {
-  const entries = economy.getLeaderboard(100);
+  const entries = leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild);
   return message.channel.send(ui.leaderboardContainer(cfg, 'rich', 0, entries, message.author.id));
 };
 
@@ -819,7 +831,11 @@ client.on('messageCreate', async (message) => {
     const lower = content.toLowerCase();
 
     const dbUser = db.getUser(message.author.id);
-    economy.earnFromMessage(dbUser);
+    const displayName = message.member?.displayName || message.author.globalName || message.author.username;
+    if (dbUser.displayName !== displayName) {
+      dbUser.displayName = displayName;
+      db.markDirty(dbUser);
+    }
     economy.registerWorldEventParticipant(message.channel.id, message.author.id);
 
     if (!lower.startsWith(cfg.PREFIX)) return;
@@ -890,7 +906,7 @@ client.on('interactionCreate', async (interaction) => {
         page = 0;
       }
       const entries = mode === 'debt' ? economy.getDebtLeaderboard(100) : economy.getLeaderboard(100);
-      return interaction.update(ui.leaderboardContainer(cfg, mode, page, entries, allowedId));
+      return interaction.update(ui.leaderboardContainer(cfg, mode, page, leaderboardEntriesForGuild(entries, interaction.guild), allowedId));
     }
 
     if (ns === 'shopbuy') {
@@ -962,22 +978,25 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.update(ui.infoCard(cfg, 'Duelo rechazado', `${interaction.member.displayName} decidió no pelear.`));
       }
       if (action === 'accept') {
+        await interaction.deferUpdate();
         const { challengerId, bet } = challenge;
+        const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
+        if (!challengerMember) {
+          economy.cancelDuelChallenge(allowedId);
+          return interaction.editReply(ui.infoCard(cfg, 'Duelo cancelado', 'No pude cargar el perfil del retador; no se descontó la apuesta.'));
+        }
+
         const challengerData = db.getUser(challengerId);
         const targetData = db.getUser(allowedId);
         const result = economy.resolveDuel(challengerData, challengerId, targetData, allowedId, bet);
         if (result.error) {
           economy.cancelDuelChallenge(allowedId);
-          return interaction.update(ui.errorCard(cfg, 'No se pudo realizar el duelo', result.error === 'balance_limit'
+          return interaction.editReply(ui.errorCard(cfg, 'No se pudo realizar el duelo', result.error === 'balance_limit'
             ? 'El premio excedería el límite seguro de saldo.'
             : 'Alguno de los dos ya no tiene suficiente Cash.'));
         }
-        const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
-        if (!challengerMember) {
-          return interaction.update(ui.infoCard(cfg, 'Duelo resuelto', 'El resultado se calculó, pero no pude cargar el perfil del retador.'));
-        }
         const narration = cfg.DUEL_NARRATIONS[Math.floor(Math.random() * cfg.DUEL_NARRATIONS.length)];
-        await interaction.update(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, 0));
+        await interaction.editReply(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, 0));
         for (const frame of [1, 2]) {
           await new Promise((resolve) => setTimeout(resolve, 650));
           await interaction.message.edit(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, frame)).catch(() => {});

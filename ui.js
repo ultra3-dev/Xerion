@@ -481,7 +481,11 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
     const lines = pageEntries.map((e, i) => {
       const rank = startIdx + i;
       const marker = medals[rank] || `**${rank + 1}.**`;
-      return `${marker} <@${e.id}> — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
+      const displayName = String(e.displayName || `Usuario ${e.id}`)
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/([\\*_`~|])/g, '\\$1')
+        .replace(/@/g, '@\u200b');
+      return `${marker} **${displayName}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
     });
     c.addTextDisplayComponents(text(lines.join('\n')));
   }

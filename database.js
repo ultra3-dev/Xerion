@@ -322,7 +322,7 @@ function defaultUser() {
     cash: 0,
     bank: 0,
     debt: 0,
-    lastMessageAt: 0,
+    displayName: '',
     cooldowns: {},
     cooldownCycles: {},
     inventory: {},
@@ -347,12 +347,13 @@ function defaultUser() {
 // Rellena campos nuevos en usuarios creados por versiones anteriores del bot,
 // para que nunca truene por un campo que no existía todavía (sin errores).
 function ensureShape(user) {
-  for (const key of ['cash', 'bank', 'debt', 'lastMessageAt', 'xp', 'classChangedAt', 'bountyOn', 'createdAt']) {
+  for (const key of ['cash', 'bank', 'debt', 'xp', 'classChangedAt', 'bountyOn', 'createdAt']) {
     if (!Number.isFinite(user[key])) user[key] = key === 'createdAt' ? Date.now() : 0;
   }
   user.cash = Math.max(0, user.cash);
   user.bank = Math.max(0, user.bank);
   user.debt = Math.max(0, user.debt);
+  if (typeof user.displayName !== 'string') user.displayName = '';
   user.xp = Math.max(0, user.xp);
   if (!user.cooldowns || typeof user.cooldowns !== 'object' || Array.isArray(user.cooldowns)) user.cooldowns = {};
   if (!user.cooldownCycles || typeof user.cooldownCycles !== 'object' || Array.isArray(user.cooldownCycles)) user.cooldownCycles = {};

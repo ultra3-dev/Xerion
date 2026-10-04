@@ -277,3 +277,34 @@ test('work and harvest keep distinct 5-minute and 3-minute intervals; rob waits 
   assert.equal(cfg.COOLDOWN_POLICIES.rob.intervalMs, 10 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.rob.restMs, 10 * 60 * 1000);
 });
+
+test('chat messages no longer earn passive Candys', () => {
+  assert.equal(economy.earnFromMessage, undefined);
+  assert.equal(cfg.MESSAGE_COOLDOWN_MS, undefined);
+  assert.equal(cfg.MESSAGE_REWARD, undefined);
+  const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
+});
+
+test('leaderboard renders saved names or an explicit fallback, never raw user mentions', () => {
+  const view = ui.leaderboardContainer(cfg, 'rich', 0, [
+    { id: 'known-player', displayName: 'Alice Example', value: 500 },
+    { id: 'legacy-player', value: 250 },
+  ], 'viewer');
+  const rendered = JSON.stringify(view);
+  assert.match(rendered, /Alice Example/);
+  assert.match(rendered, /Usuario legacy-player/);
+  assert.doesNotMatch(rendered, /<@(?:known-player|legacy-player)>/);
+});
+
+test('duel acceptance acknowledges before fetching the other member', () => {
+  const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const acceptStart = indexSource.indexOf("if (action === 'accept') {", indexSource.indexOf("if (ns === 'duel')"));
+  const acceptEnd = indexSource.indexOf('\n      }\n    }', acceptStart);
+  assert.ok(acceptStart >= 0 && acceptEnd > acceptStart);
+  const acceptHandler = indexSource.slice(acceptStart, acceptEnd);
+  const acknowledgeAt = acceptHandler.indexOf('await interaction.deferUpdate();');
+  const fetchAt = acceptHandler.indexOf('await interaction.guild.members.fetch');
+  assert.ok(acknowledgeAt >= 0 && fetchAt > acknowledgeAt);
+  assert.doesNotMatch(acceptHandler, /interaction\.update\(/);
+});
