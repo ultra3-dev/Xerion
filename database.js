@@ -201,7 +201,7 @@ async function loadDB() {
     postgresPool = new Pool({
       connectionString,
       ssl: { rejectUnauthorized: false },
-      max: 5,
+      max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       allowExitOnIdle: false,
@@ -821,7 +821,7 @@ function formatDuration(ms) {
 }
 
 // ---------- Nivel / experiencia ----------
-// Curva: nivel = floor(sqrt(xp / 50)) → nivel 1 a los 50xp, nivel 10 a los 5,000xp.
+// Se conserva la curva existente para que el ajuste de recompensas no baje niveles actuales.
 
 function getLevel(xp) {
   return Math.floor(Math.sqrt(Math.max(0, xp || 0) / 50));

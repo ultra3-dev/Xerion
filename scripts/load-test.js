@@ -33,6 +33,7 @@ async function main() {
     assert.equal(Object.keys(users).length, totalUsers, 'all synthetic profiles should exist');
     assert.equal(users['synthetic-0'].stats.totalWorked, 1);
     assert.equal(users['synthetic-0'].stats.totalHarvested, 1);
+    assert.equal(users['synthetic-0'].xp, 4, 'successful work and harvest should award their configured XP');
     assert.ok(users['synthetic-9999'].cash > 0);
 
     console.log(JSON.stringify({

@@ -214,8 +214,8 @@ module.exports = {
 
   // --- RPG: experiencia y nivel ---
   XP_PER_ACTION: {
-    work: 4, crime: 6, hunt: 6, dungeon: 15, boss: 30, duel: 8, quest: 10, rob: 5,
-    scavenge: 3, candyraid: 8, harvest: 4,
+    work: 2, beg: 1, crime: 2, hunt: 3, dungeon: 67, boss: 4, duel: 2, quest: 4, rob: 2,
+    scavenge: 2, candyraid: 2, harvest: 2, trickortreat: 1, daily: 2, collect: 2,
   },
 
   // --- RPG: clases permanentes (se eligen una vez al llegar al nivel 5) ---
@@ -462,11 +462,11 @@ module.exports = {
 
   // --- Evento mundial aleatorio ---
   WORLD_EVENT_CHANNEL_ID: '1489672925299605555',
-  WORLD_EVENT_INTERVAL_MS: 3 * 60 * 60 * 1000,
-  WORLD_EVENT_CHANCE: 0.39,
+  WORLD_EVENT_INTERVAL_MS: 90 * 60 * 1000,
   WORLD_EVENT_DURATION_MS: 60 * 1000,
-  WORLD_EVENT_REWARD_MIN: 100,
-  WORLD_EVENT_REWARD_MAX: 800,
+  WORLD_EVENT_MAIN_REWARD: 39000,
+  WORLD_EVENT_OTHER_REWARD_MAX: 38999,
+  WORLD_EVENT_MAX_TOTAL_REWARD: 93000,
   WORLD_EVENT_TEMPLATES: [
     { title: '🕷️ ¡Una araña gigante invade el canal!', description: 'Todos los que escriban en los próximos **60 segundos** conseguirán un puñado de Candys antes de que escape.' },
     { title: '🎃 ¡Una calabaza mágica ha aparecido!', description: 'Está repartiendo Candys a quien participe en el chat durante **60 segundos**.' },

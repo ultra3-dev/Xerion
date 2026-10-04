@@ -49,6 +49,48 @@ test('the configured event window matches the supplied Unix timestamps exactly',
   assert.equal(cfg.EVENT_END.toISOString(), '2026-11-09T20:30:00.000Z');
 });
 
+test('the existing level curve stays intact for current players', () => {
+  assert.equal(db.getLevel(49), 0);
+  assert.equal(db.getLevel(50), 1);
+  assert.equal(db.getLevel(4999), 9);
+  assert.equal(db.getLevel(5000), 10);
+  assert.equal(db.xpForLevel(10), 5000);
+});
+
+test('world events run every 90 minutes and cap payouts with one 39k winner', () => {
+  assert.equal(cfg.WORLD_EVENT_INTERVAL_MS, 90 * 60 * 1000);
+  assert.equal(cfg.WORLD_EVENT_MAIN_REWARD, 39000);
+  assert.equal(cfg.WORLD_EVENT_MAX_TOTAL_REWARD, 93000);
+
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, { title: 'Evento de prueba', description: 'Participa.' });
+    for (let i = 0; i < 10; i += 1) {
+      economy.registerWorldEventParticipant(cfg.WORLD_EVENT_CHANNEL_ID, `world-event-player-${i}`);
+    }
+    const result = economy.resolveWorldEvent();
+    const winner = result.rewards.find((reward) => reward.isWinner);
+    const others = result.rewards.filter((reward) => !reward.isWinner);
+
+    assert.equal(winner.id, 'world-event-player-0');
+    assert.equal(winner.amount, 39000);
+    assert.ok(others.every((reward) => reward.amount < 39000));
+    assert.equal(others[0].amount, 6000);
+    assert.equal(result.totalReward, 93000);
+    assert.ok(result.totalReward <= cfg.WORLD_EVENT_MAX_TOTAL_REWARD);
+
+    economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, { title: 'Evento pequeño', description: 'Participa.' });
+    economy.registerWorldEventParticipant(cfg.WORLD_EVENT_CHANNEL_ID, 'world-event-solo');
+    const soloResult = economy.resolveWorldEvent();
+    assert.equal(soloResult.rewards.length, 1);
+    assert.equal(soloResult.rewards[0].amount, 39000);
+    assert.equal(soloResult.totalReward, 39000);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test('the closing daily bonus is not awarded after the exact event cutoff', () => {
   const beforeCutoff = db.getUser('finale-daily-before-cutoff-test');
   const atCutoff = db.getUser('finale-daily-at-cutoff-test');
@@ -222,6 +264,8 @@ test('successful actions award materials and progress one-time quest objectives'
   Date.now = () => currentTime;
   try {
     const activity = economy.recordActivity(user, 'work');
+    assert.equal(activity.xp, cfg.XP_PER_ACTION.work + cfg.XP_PER_ACTION.quest);
+    assert.equal(user.xp, 1000 + cfg.XP_PER_ACTION.work + cfg.XP_PER_ACTION.quest);
     assert.equal(activity.materials.length, 1);
     assert.equal(user.materials[activity.materials[0].id], 2);
     assert.equal(activity.questProgress.completed, true);
@@ -236,6 +280,34 @@ test('successful actions award materials and progress one-time quest objectives'
   } finally {
     Math.random = originalRandom;
     Date.now = originalNow;
+  }
+});
+
+test('gameplay activities award their configured XP and dungeon XP requires a clear', () => {
+  for (const [action, amount] of Object.entries(cfg.XP_PER_ACTION)) {
+    const user = db.getUser(`xp-activity-${action}`);
+    const beforeXp = user.xp;
+    const activity = economy.recordActivity(user, action);
+    assert.equal(activity.xp, amount, `${action} should award its configured XP`);
+    assert.equal(user.xp, beforeXp + amount, `${action} should persist its XP`);
+  }
+
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0;
+    const clearUser = db.getUser('dungeon-xp-clear-test');
+    const clear = economy.doDungeon(clearUser);
+    assert.equal(clear.success, true);
+    assert.equal(clear.activity.xp, 67);
+    assert.equal(clearUser.xp, 67);
+
+    Math.random = () => 0.99;
+    const failedUser = db.getUser('dungeon-xp-fail-test');
+    const failed = economy.doDungeon(failedUser);
+    assert.equal(failed.success, false);
+    assert.equal(failedUser.xp, 0);
+  } finally {
+    Math.random = originalRandom;
   }
 });
 

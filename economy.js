@@ -285,7 +285,6 @@ function doWork(user) {
   reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
   user.cash += reward;
   db.incrementStat(user, 'totalWorked');
-  db.addXp(user, cfg.XP_PER_ACTION.work);
   db.markDirty(user);
   return { reward, flavor: pick(FLAVOR.work), activity: recordActivity(user, 'work') };
 }
@@ -312,7 +311,6 @@ function doScavenge(user) {
   );
   user.cash += reward;
   db.incrementStat(user, 'totalScavenged');
-  db.addXp(user, cfg.XP_PER_ACTION.scavenge);
   return { reward, flavor: pick(FLAVOR.scavenge), activity: recordActivity(user, 'scavenge') };
 }
 
@@ -333,7 +331,6 @@ function doHarvest(user) {
   );
   user.cash += reward;
   db.incrementStat(user, 'totalHarvested');
-  db.addXp(user, cfg.XP_PER_ACTION.harvest);
   db.markDirty(user);
   return { reward, flavor: pick(HARVEST_FLAVOR), activity: recordActivity(user, 'harvest') };
 }
@@ -349,7 +346,6 @@ function doCandyRaid(user) {
     );
     user.cash += reward;
     db.incrementStat(user, 'candyRaids');
-    db.addXp(user, cfg.XP_PER_ACTION.candyraid);
     db.markDirty(user);
     return { success: true, reward, flavor: pick(FLAVOR.candyraid), activity: recordActivity(user, 'candyraid') };
   }
@@ -380,7 +376,6 @@ function doCrime(user) {
     let reward = Math.round(db.randomInt(cfg.CRIME_REWARD_MIN, cfg.CRIME_REWARD_MAX) * (1 + permanentBonus(user, 'crimeReward')));
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
-    db.addXp(user, cfg.XP_PER_ACTION.crime);
     db.markDirty(user);
     return { success: true, reward, flavor: pick(FLAVOR.crimeWin), activity: recordActivity(user, 'crime') };
   }
@@ -418,7 +413,6 @@ function attemptRob(robber, target) {
     }
     target.cooldowns.robProtection = Date.now() + cfg.ROB_PROTECTION_MS;
     db.incrementStat(robber, 'robWins');
-    db.addXp(robber, cfg.XP_PER_ACTION.rob);
     db.markDirty(robber, target);
     return { success: true, amount, bountyClaimed, flavor: pick(FLAVOR.robWin), activity: recordActivity(robber, 'rob') };
   }
@@ -440,7 +434,6 @@ function doHunt(user) {
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
     db.incrementStat(user, 'huntWins');
-    db.addXp(user, cfg.XP_PER_ACTION.hunt);
     db.markDirty(user);
     return { success: true, reward, monster, activity: recordActivity(user, 'hunt') };
   }
@@ -459,7 +452,6 @@ function doDungeon(user) {
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
     db.incrementStat(user, 'dungeonClears');
-    db.addXp(user, cfg.XP_PER_ACTION.dungeon);
     db.markDirty(user);
     return { success: true, reward, flavor: pick(FLAVOR.dungeonWin), activity: recordActivity(user, 'dungeon') };
   }
@@ -479,7 +471,6 @@ function doBoss(user) {
     reward = Math.min(reward, cfg.MAX_SINGLE_GAIN);
     user.cash += reward;
     db.incrementStat(user, 'bossWins');
-    db.addXp(user, cfg.XP_PER_ACTION.boss);
     db.markDirty(user);
     return { success: true, reward, activity: recordActivity(user, 'boss') };
   }
@@ -513,6 +504,8 @@ function doQuest(user) {
 }
 
 function recordActivity(user, action) {
+  const actionXp = cfg.XP_PER_ACTION[action] || 0;
+  if (actionXp > 0) db.addXp(user, actionXp);
   const actionDropChance = {
     work: 0.35, beg: 0.15, crime: 0.35, scavenge: 0.55, harvest: 0.45,
     candyraid: 0.50, trickortreat: 0.30, rob: 0.35, hunt: 0.60,
@@ -527,6 +520,7 @@ function recordActivity(user, action) {
   }
 
   let questProgress = null;
+  let questXp = 0;
   const quest = user.activeQuest;
   if (quest && quest.action === action) {
     quest.progress = Math.min(quest.target, (quest.progress || 0) + 1);
@@ -537,7 +531,8 @@ function recordActivity(user, action) {
       const total = Math.round((base + bonus) * (1 + permanentBonus(user, 'questReward')));
       const completedQuest = { ...quest };
       user.cash += total;
-      db.addXp(user, cfg.XP_PER_ACTION.quest);
+      questXp = cfg.XP_PER_ACTION.quest || 0;
+      if (questXp > 0) db.addXp(user, questXp);
       user.completedQuestIds = Array.isArray(user.completedQuestIds) ? user.completedQuestIds : [];
       user.completedQuestIds.push(quest.id);
       user.completedQuestActions = Array.isArray(user.completedQuestActions) ? user.completedQuestActions : [];
@@ -550,7 +545,7 @@ function recordActivity(user, action) {
       db.markDirty(user);
     }
   }
-  return { materials, questProgress };
+  return { materials, questProgress, xp: actionXp + questXp };
 }
 
 // La recompensa diaria especial solo se entrega en el último día UTC del evento
@@ -572,7 +567,7 @@ function doDaily(user, now) {
     : Math.min(db.randomInt(cfg.DAILY_REWARD_MIN, cfg.DAILY_REWARD_MAX), cfg.MAX_SINGLE_GAIN);
   user.cash += total;
   db.markDirty(user);
-  return { total, finale, flavor: pick(FLAVOR.daily) };
+  return { total, finale, flavor: pick(FLAVOR.daily), activity: recordActivity(user, 'daily') };
 }
 
 // ---------- RPG: duelo (reto/aceptar) ----------
@@ -607,11 +602,9 @@ function resolveDuel(challenger, challengerId, target, targetId, bet) {
   if (challengerWins) {
     challenger.cash += pot;
     db.incrementStat(challenger, 'duelWins');
-    db.addXp(challenger, cfg.XP_PER_ACTION.duel);
   } else {
     target.cash += pot;
     db.incrementStat(target, 'duelWins');
-    db.addXp(target, cfg.XP_PER_ACTION.duel);
   }
   const winnerActivity = challengerWins
     ? recordActivity(challenger, 'duel')
@@ -1117,16 +1110,28 @@ function startWorldEvent(channelId, template) {
 
 function resolveWorldEvent() {
   if (!worldEvent) return null;
+  const participantIds = [...worldEvent.participants];
+  const winnerId = participantIds.length
+    ? participantIds[Math.floor(Math.random() * participantIds.length)]
+    : null;
+  const otherCount = Math.max(1, participantIds.length - 1);
+  const otherReward = participantIds.length > 1
+    ? Math.min(
+      cfg.WORLD_EVENT_OTHER_REWARD_MAX,
+      Math.floor((cfg.WORLD_EVENT_MAX_TOTAL_REWARD - cfg.WORLD_EVENT_MAIN_REWARD) / otherCount),
+    )
+    : 0;
   const rewards = [];
-  for (const id of worldEvent.participants) {
+  for (const id of participantIds) {
     const user = db.getUser(id);
-    let amount = db.randomInt(cfg.WORLD_EVENT_REWARD_MIN, cfg.WORLD_EVENT_REWARD_MAX);
-    amount = Math.min(amount, cfg.MAX_SINGLE_GAIN);
+    const isWinner = id === winnerId;
+    const amount = isWinner ? cfg.WORLD_EVENT_MAIN_REWARD : otherReward;
     user.cash += amount;
     db.markDirty(user);
-    rewards.push({ id, amount });
+    rewards.push({ id, amount, isWinner });
   }
-  const result = { template: worldEvent.template, rewards };
+  const totalReward = rewards.reduce((sum, reward) => sum + reward.amount, 0);
+  const result = { template: worldEvent.template, rewards, winnerId, totalReward };
   worldEvent = null;
   return result;
 }

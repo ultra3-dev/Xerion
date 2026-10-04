@@ -85,6 +85,7 @@ function activityNotice(activity) {
     const progress = activity.questProgress;
     notices.push(`📜 Misión: **${progress.quest.progress}/${progress.quest.target}** — ${progress.quest.description}`);
   }
+  if (activity.xp > 0) notices.push(`**+${activity.xp} XP** ⭐`);
   return notices.length ? `\n\n${notices.join('\n')}` : '';
 }
 
@@ -630,9 +631,9 @@ commands.daily = async (message, args, member, dbUser) => {
   const result = economy.doDaily(dbUser, new Date());
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Ya reclamaste hoy', `Vuelve en ${db.formatDuration(result.remaining)}.`));
   if (result.finale) {
-    return message.channel.send(ui.successCard(cfg, '🎉 ¡Regalo de cierre del evento!', `${result.flavor}. Como el evento de Halloween termina hoy, la Bruja te dio un regalo especial: **+${db.fmt(result.total)}**${cfg.CANDY_EMOJI}.`));
+    return message.channel.send(ui.successCard(cfg, '🎉 ¡Regalo de cierre del evento!', `${result.flavor}. Como el evento de Halloween termina hoy, la Bruja te dio un regalo especial: **+${db.fmt(result.total)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
   }
-  return message.channel.send(ui.successCard(cfg, 'Recompensa diaria', `${result.flavor} y ganaste **+${db.fmt(result.total)}**${cfg.CANDY_EMOJI}.`));
+  return message.channel.send(ui.successCard(cfg, 'Recompensa diaria', `${result.flavor} y ganaste **+${db.fmt(result.total)}**${cfg.CANDY_EMOJI}.${activityNotice(result.activity)}`));
 };
 
 commands.collect = async (message, args, member, dbUser) => {
@@ -790,7 +791,6 @@ function scheduleWorldEvents() {
   setInterval(async () => {
     try {
       if (economy.isWorldEventActive()) return;
-      if (Math.random() >= cfg.WORLD_EVENT_CHANCE) return;
       const channel = await client.channels.fetch(cfg.WORLD_EVENT_CHANNEL_ID).catch(() => null);
       if (!channel) return;
       const template = cfg.WORLD_EVENT_TEMPLATES[Math.floor(Math.random() * cfg.WORLD_EVENT_TEMPLATES.length)];

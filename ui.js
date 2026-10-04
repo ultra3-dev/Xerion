@@ -623,6 +623,11 @@ function worldEventStartCard(cfg, template) {
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(template.description));
   c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `👑 Premio principal: **+${db.fmt(cfg.WORLD_EVENT_MAIN_REWARD)}**${cfg.CANDY_EMOJI} para una persona.\n`
+    + `🎁 El resto comparte hasta **+${db.fmt(cfg.WORLD_EVENT_MAX_TOTAL_REWARD - cfg.WORLD_EVENT_MAIN_REWARD)}**${cfg.CANDY_EMOJI}; cada premio será menor a 39,000. Tope total: **${db.fmt(cfg.WORLD_EVENT_MAX_TOTAL_REWARD)}**${cfg.CANDY_EMOJI}.`,
+  ));
+  c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text('-# Solo tienes que escribir cualquier mensaje en este canal para participar.'));
   return payload(c);
 }
@@ -634,11 +639,19 @@ function worldEventResultCard(cfg, result) {
   if (!result.rewards.length) {
     c.addTextDisplayComponents(text('Nadie participó a tiempo... el evento desapareció sin dejar rastro.'));
   } else if (result.rewards.length <= 15) {
-    const lines = result.rewards.map((r) => `<@${r.id}> ganó **+${db.fmt(r.amount)}**${cfg.CANDY_EMOJI}`);
+    const winner = result.rewards.find((r) => r.isWinner);
+    const others = result.rewards.filter((r) => !r.isWinner);
+    const lines = [
+      ...(winner ? [`👑 <@${winner.id}> ganó el premio principal: **+${db.fmt(winner.amount)}**${cfg.CANDY_EMOJI}`] : []),
+      ...others.map((r) => `<@${r.id}> ganó **+${db.fmt(r.amount)}**${cfg.CANDY_EMOJI}`),
+      `💰 Total repartido: **${db.fmt(result.totalReward)}**${cfg.CANDY_EMOJI}`,
+    ];
     c.addTextDisplayComponents(text(lines.join('\n')));
   } else {
-    const total = result.rewards.reduce((s, r) => s + r.amount, 0);
-    c.addTextDisplayComponents(text(`**${result.rewards.length}** personas participaron y se repartieron **${db.fmt(total)}**${cfg.CANDY_EMOJI} en total.`));
+    c.addTextDisplayComponents(text(
+      `**${result.rewards.length}** personas participaron. Premio principal: <@${result.winnerId}> recibió **+${db.fmt(cfg.WORLD_EVENT_MAIN_REWARD)}**${cfg.CANDY_EMOJI}. `
+      + `Se repartieron **${db.fmt(result.totalReward)}**${cfg.CANDY_EMOJI} en total.`,
+    ));
   }
   return payload(c);
 }
