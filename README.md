@@ -78,14 +78,28 @@ un mensaje privado (Ephemeral). Los recibos de compras con botones también son
 privados. Las respuestas normales de comandos de prefijo siguen siendo
 públicas.
 
-El evento corre en UTC desde el **3 de octubre hasta el 9 de noviembre de 2026,
-inclusive**. Para activar el beneficio de un rol se compra primero con Candys y
-los materiales que aparecen en la tienda; después se paga la mitad del precio
-para activar el beneficio. Si ya tienes el rol de Discord, no se vuelve a
-asignar al activarlo. `xn collect` reclama el ingreso del **mejor rol activado**;
-no suma roles ni guarda reclamos pendientes. Cada rol tiene su propio monto y
-cooldown, incluido Spooky Season: 369.000 Candys cada 3 días. El último `daily`
-del evento es el 9 de noviembre UTC.
+El evento está activo desde <t:1791081000:F> (**4 de octubre de 2026, 02:30 UTC**)
+hasta <t:1794256200:F> (**9 de noviembre de 2026, 20:30 UTC**); el fin es
+exclusivo. Discord convierte los timestamps a la zona horaria local de cada
+persona.
+
+Juega los comandos de economía para ganar Candys y encontrar los materiales de
+Halloween; consulta tu inventario con `xn inventory`. Abre `xn eventshop` para
+ver los nueve roles, sus costos y recetas. Cada rol se compra con Candys y
+materiales; luego se activa pagando la mitad adicional de su precio. Si ya
+tienes ese rol de Discord, el bot no lo vuelve a asignar.
+
+`xn collect` entrega el ingreso del **mejor rol activado**: los ingresos de varios
+roles no se suman y cada reclamo tiene el cooldown mostrado en la tienda. Por
+ejemplo, STAR X entrega 12.000 Candys cada 4 horas y Spooky Season entrega
+369.000 cada 72 horas. No se pueden comprar, activar ni reclamar ingresos nuevos
+a partir del cierre exacto del evento. `xn daily` da el bono de cierre de
+50.000 Candys en el último día UTC del evento, solo si se reclama antes del
+cierre y el cooldown permite reclamarlo.
+
+`xn top` muestra el top global paginado de ricos o endeudados. Los puestos con
+IDs de Discord se representan como `<@ID>` sin notificar ni hacer ping a esas
+personas.
 
 ## Render
 

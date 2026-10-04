@@ -454,11 +454,10 @@ module.exports = {
     { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 30000, collectCooldownMs: 8 * 60 * 60 * 1000, requirements: { amber_dust: 5, candle_wax: 6, haunted_thread: 6, twilight_moss: 6 } },
     { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 12000, collectCooldownMs: 4 * 60 * 60 * 1000, requirements: { candy_corn: 4, grave_dirt: 5, pumpkin_seed: 5, sugar_skull: 4 } },
   ],
-  // Horas en UTC a propósito: así el evento empieza/termina igual sin importar
-  // en qué zona horaria esté el servidor donde corra el bot (ej. Render = UTC).
-  EVENT_START: new Date('2026-10-03T00:00:00Z'),
-  // Fin exclusivo para incluir el día 9 de noviembre completo (UTC).
-  EVENT_END: new Date('2026-11-10T00:00:00Z'),
+  // Instantes exactos del evento (UTC), independientes de la zona horaria del host.
+  EVENT_START: new Date('2026-10-04T02:30:00.000Z'),
+  // Fin exclusivo: las compras y los ingresos se cierran a partir de este instante.
+  EVENT_END: new Date('2026-11-09T20:30:00.000Z'),
   EVENT_INVITE_URL: 'https://discord.gg/n8f9yMkbj?event=1551612930183790673',
 
   // --- Evento mundial aleatorio ---

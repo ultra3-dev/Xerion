@@ -386,9 +386,11 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser, page = 0) {
   const c = container(cfg.COLORS.GOLD);
   let status;
   const active = now >= cfg.EVENT_START && now < cfg.EVENT_END;
-  if (now < cfg.EVENT_START) status = '🕰️ El evento comienza el **3 de octubre de 2026**.';
+  const startTag = `<t:${Math.floor(cfg.EVENT_START.getTime() / 1000)}:F>`;
+  const endTag = `<t:${Math.floor(cfg.EVENT_END.getTime() / 1000)}:F>`;
+  if (now < cfg.EVENT_START) status = `🕰️ El evento comienza el ${startTag}.`;
   else if (now >= cfg.EVENT_END) status = '🕸️ El evento de Halloween ha terminado.';
-  else status = '🎉 ¡El evento está activo hasta el **9 de noviembre de 2026**!';
+  else status = `🎉 ¡El evento está activo hasta el ${endTag}!`;
   c.addTextDisplayComponents(text('# 🎃 Tienda del Evento de Halloween'));
   c.addTextDisplayComponents(text(status));
   c.addSeparatorComponents(sep());
@@ -533,7 +535,8 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
         .replace(/([\\*_`~|])/g, '\\$1')
         .replace(/^@+/, '')
         .replace(/@/g, '@\u200b');
-      const userLabel = `@${displayName}`;
+      const id = String(e.id || '');
+      const userLabel = /^\d{17,20}$/.test(id) ? `<@${id}>` : `@${displayName}`;
       return `${marker} **${userLabel}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
     });
     c.addTextDisplayComponents(text(lines.join('\n')));
@@ -800,12 +803,14 @@ function eventInfoCard(cfg, now) {
   c.addTextDisplayComponents(text('# 🎃 Evento de Halloween'));
   c.addSeparatorComponents(sep());
   let status;
+  const startTag = `<t:${Math.floor(cfg.EVENT_START.getTime() / 1000)}:F>`;
+  const endTag = `<t:${Math.floor(cfg.EVENT_END.getTime() / 1000)}:F>`;
   if (now < cfg.EVENT_START) {
-    status = `🕰️ Comienza en **${db.formatDuration(cfg.EVENT_START - now)}** (3 de octubre de 2026).`;
+    status = `🕰️ Comienza ${startTag} (en **${db.formatDuration(cfg.EVENT_START - now)}**).`;
   } else if (now >= cfg.EVENT_END) {
     status = '🕸️ El evento ya terminó. ¡Gracias por participar!';
   } else {
-    status = `🎉 ¡Activo ahora mismo! Termina en **${db.formatDuration(cfg.EVENT_END - now)}** (9 de noviembre de 2026).`;
+    status = `🎉 ¡Activo ahora mismo! Termina ${endTag} (en **${db.formatDuration(cfg.EVENT_END - now)}**).`;
   }
   c.addTextDisplayComponents(text(status));
   c.addSeparatorComponents(sep());

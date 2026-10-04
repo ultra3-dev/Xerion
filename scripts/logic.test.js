@@ -42,9 +42,18 @@ test('the release exposes exactly 50 prefix command handlers', () => {
   assert.equal(handlerCount, 50);
 });
 
-test('the configured event window includes Oct 3 through Nov 9 in UTC', () => {
-  assert.equal(cfg.EVENT_START.toISOString(), '2026-10-03T00:00:00.000Z');
-  assert.equal(cfg.EVENT_END.toISOString(), '2026-11-10T00:00:00.000Z');
+test('the configured event window matches the supplied Unix timestamps exactly', () => {
+  assert.equal(Math.floor(cfg.EVENT_START.getTime() / 1000), 1791081000);
+  assert.equal(Math.floor(cfg.EVENT_END.getTime() / 1000), 1794256200);
+  assert.equal(cfg.EVENT_START.toISOString(), '2026-10-04T02:30:00.000Z');
+  assert.equal(cfg.EVENT_END.toISOString(), '2026-11-09T20:30:00.000Z');
+});
+
+test('the closing daily bonus is not awarded after the exact event cutoff', () => {
+  const beforeCutoff = db.getUser('finale-daily-before-cutoff-test');
+  const atCutoff = db.getUser('finale-daily-at-cutoff-test');
+  assert.equal(economy.doDaily(beforeCutoff, new Date(cfg.EVENT_END.getTime() - 1)).finale, true);
+  assert.equal(economy.doDaily(atCutoff, new Date(cfg.EVENT_END)).finale, false);
 });
 
 test('all major Components V2 views stay within Discord’s 40-component limit', () => {
@@ -115,7 +124,7 @@ test('collect pays only the best activated role and applies its configured coold
   user.eventRolesActivated = [...user.eventRolesPurchased];
 
   const originalNow = Date.now;
-  let currentTime = Date.parse('2026-10-03T00:00:00Z');
+  let currentTime = cfg.EVENT_START.getTime();
   Date.now = () => currentTime;
   try {
     const first = economy.collectEventIncome(user, new Date(currentTime));
@@ -146,11 +155,11 @@ test('collect rejects calls outside the event and does not apply a fixed payout 
   role.collectReward = 999999;
   try {
     assert.equal(
-      economy.collectEventIncome(user, new Date('2026-10-02T23:59:59Z')).error,
+      economy.collectEventIncome(user, new Date(cfg.EVENT_START.getTime() - 1)).error,
       'notstarted',
     );
 
-    const now = Date.parse('2026-10-03T00:00:00Z');
+    const now = cfg.EVENT_START.getTime();
     const originalNow = Date.now;
     Date.now = () => now;
     try {
@@ -161,7 +170,7 @@ test('collect rejects calls outside the event and does not apply a fixed payout 
     }
 
     assert.equal(
-      economy.collectEventIncome(user, new Date('2026-11-10T00:00:00Z')).error,
+      economy.collectEventIncome(user, new Date(cfg.EVENT_END)).error,
       'ended',
     );
   } finally {
@@ -324,7 +333,7 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('global leaderboard shows @names as plain text and never creates Discord pings', () => {
+test('global leaderboard uses Discord user syntax without sending any pings', () => {
   const guildMemberId = '123456789012345678';
   const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
@@ -333,11 +342,9 @@ test('global leaderboard shows @names as plain text and never creates Discord pi
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, /@Guild Nick/);
-  assert.match(rendered, /@Global Name/);
+  assert.match(rendered, new RegExp(`<@${guildMemberId}>`));
+  assert.match(rendered, new RegExp(`<@${globalUserId}>`));
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, new RegExp(`<@${guildMemberId}>`));
-  assert.doesNotMatch(rendered, new RegExp(`<@${globalUserId}>`));
   assert.doesNotMatch(rendered, /Unknown-user/i);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
