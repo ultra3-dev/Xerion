@@ -141,7 +141,7 @@ module.exports = {
   // --- rob ---
   ROB_SUCCESS_CHANCE: 0.45,
   ROB_STEAL_PCT_MIN: 0.10,
-  ROB_STEAL_PCT_MAX: 0.35,
+  ROB_STEAL_PCT_MAX: 0.70,
   ROB_FAIL_DEBT_MIN: 500,
   ROB_FAIL_DEBT_MAX: 2000,
   ROB_PROTECTION_MS: 5 * 60 * 1000, // tras ser robado, 5 min de gracia
@@ -214,8 +214,8 @@ module.exports = {
 
   // --- RPG: experiencia y nivel ---
   XP_PER_ACTION: {
-    work: 3, beg: 2, crime: 3, hunt: 4, dungeon: 80, boss: 5, duel: 3, quest: 5, rob: 3,
-    scavenge: 3, candyraid: 3, harvest: 3, trickortreat: 2, daily: 3, collect: 3,
+    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 10, duel: 6, quest: 10, rob: 6,
+    scavenge: 6, candyraid: 6, harvest: 6, trickortreat: 4, daily: 6, collect: 6,
   },
 
   // --- RPG: clases permanentes (se eligen una vez al llegar al nivel 5) ---

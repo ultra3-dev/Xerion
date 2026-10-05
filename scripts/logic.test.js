@@ -88,6 +88,14 @@ test('the existing level curve stays intact for current players', () => {
   assert.equal(db.xpForLevel(10), 5000);
 });
 
+test('successful gameplay XP is doubled while the existing level curve is unchanged', () => {
+  assert.deepEqual(cfg.XP_PER_ACTION, {
+    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 10, duel: 6, quest: 10, rob: 6,
+    scavenge: 6, candyraid: 6, harvest: 6, trickortreat: 4, daily: 6, collect: 6,
+  });
+  assert.equal(db.xpForLevel(10), 5000);
+});
+
 test('world events run every 90 minutes and cap payouts with one 39k winner', () => {
   assert.equal(cfg.WORLD_EVENT_INTERVAL_MS, 90 * 60 * 1000);
   assert.equal(cfg.WORLD_EVENT_MAIN_REWARD, 39000);
@@ -334,8 +342,8 @@ test('gameplay activities award their configured XP and dungeon XP requires a cl
     const clearUser = db.getUser('dungeon-xp-clear-test');
     const clear = economy.doDungeon(clearUser);
     assert.equal(clear.success, true);
-    assert.equal(clear.activity.xp, 80);
-    assert.equal(clearUser.xp, 80);
+    assert.equal(clear.activity.xp, 160);
+    assert.equal(clearUser.xp, 160);
 
     Math.random = () => 0.99;
     const failedUser = db.getUser('dungeon-xp-fail-test');
@@ -511,6 +519,44 @@ test('work and harvest keep distinct 5-minute and 3-minute intervals; rob waits 
   assert.equal(cfg.COOLDOWN_POLICIES.harvest.intervalMs, 3 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.rob.intervalMs, 10 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.rob.restMs, 10 * 60 * 1000);
+});
+
+test('rob randomly steals 10–70% of victim cash and never makes either balance negative', () => {
+  const originalRandom = Math.random;
+  const attempt = (suffix, pctRoll) => {
+    const robber = db.getUser(`rob-upper-bound-${suffix}`);
+    const target = db.getUser(`rob-target-upper-bound-${suffix}`);
+    robber.cash = 0;
+    robber.cooldowns = {};
+    robber.cooldownCycles = {};
+    robber.effects = {};
+    target.cash = 10000;
+    target.cooldowns = {};
+    target.effects = {};
+    const rolls = [0, pctRoll, 0, 0.99];
+    Math.random = () => (rolls.length ? rolls.shift() : 0.99);
+    const result = economy.attemptRob(robber, target);
+    return { result, robber, target };
+  };
+  try {
+    assert.equal(cfg.ROB_STEAL_PCT_MIN, 0.10);
+    assert.equal(cfg.ROB_STEAL_PCT_MAX, 0.70);
+    const maxRob = attempt('max', 0.999999);
+    assert.equal(maxRob.result.success, true);
+    assert.equal(maxRob.result.amount, 7000);
+    assert.equal(maxRob.target.cash, 3000);
+    assert.equal(maxRob.robber.cash, 7000);
+    assert.ok(maxRob.target.cash >= 0 && maxRob.robber.cash >= 0);
+
+    const minRob = attempt('min', 0);
+    assert.equal(minRob.result.success, true);
+    assert.equal(minRob.result.amount, 1000);
+    assert.equal(minRob.target.cash, 9000);
+    assert.equal(minRob.robber.cash, 1000);
+    assert.ok(minRob.target.cash >= 0 && minRob.robber.cash >= 0);
+  } finally {
+    Math.random = originalRandom;
+  }
 });
 
 test('chat messages no longer earn passive Candys', () => {
