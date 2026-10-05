@@ -401,9 +401,10 @@ function attemptRob(robber, target) {
 
   if (success) {
     const pct = db.randomFloat(cfg.ROB_STEAL_PCT_MIN, cfg.ROB_STEAL_PCT_MAX);
-    let amount = Math.round(target.cash * pct * (1 + effectBonus(robber, 'vampire') + permanentBonus(robber, 'robAmount')));
-    amount = db.clamp(amount, 1, Math.min(target.cash, cfg.MAX_SINGLE_GAIN));
-    target.cash -= amount;
+    const bonusPct = pct * (1 + effectBonus(robber, 'vampire') + permanentBonus(robber, 'robAmount'));
+    const cappedPct = Math.min(cfg.ROB_STEAL_PCT_MAX, bonusPct);
+    const amount = db.clamp(Math.round(target.cash * cappedPct), 1, target.cash);
+    target.cash = Math.max(0, target.cash - amount);
     robber.cash += amount;
     let bountyClaimed = 0;
     if (target.bountyOn > 0) {
@@ -1090,6 +1091,10 @@ function isWorldEventActive() {
   return !!worldEvent && Date.now() < worldEvent.endsAt;
 }
 
+function hasWorldEvent() {
+  return !!worldEvent;
+}
+
 function registerWorldEventParticipant(channelId, userId) {
   if (isWorldEventActive() && worldEvent.channelId === channelId) {
     worldEvent.participants.add(userId);
@@ -1106,6 +1111,12 @@ function startWorldEvent(channelId, template) {
     template,
   };
   return worldEvent;
+}
+
+function cancelWorldEvent() {
+  if (!worldEvent) return false;
+  worldEvent = null;
+  return true;
 }
 
 function resolveWorldEvent() {
@@ -1150,5 +1161,6 @@ module.exports = {
   buyPotion, buyEventRole, activateEventRole, usePotion, refundEventRole, rollbackEventRoleActivation, collectEventIncome,
   redeemCode, recordActivity,
   getLeaderboard, getDebtLeaderboard, getRank, getServerStats, getLevelInfo,
-  isWorldEventActive, registerWorldEventParticipant, startWorldEvent, resolveWorldEvent,
+  isWorldEventActive, hasWorldEvent, registerWorldEventParticipant,
+  startWorldEvent, cancelWorldEvent, resolveWorldEvent,
 };

@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,6 +26,36 @@ function countComponents(value) {
   let total = typeof value.type === 'number' ? 1 : 0;
   for (const child of Object.values(value)) total += countComponents(child);
   return total;
+}
+
+async function sendDashboardRequest({ method, url, cookie = '', body = '' }, dependencies) {
+  const request = new EventEmitter();
+  request.method = method;
+  request.url = url;
+  request.headers = { cookie };
+  request.socket = { remoteAddress: '203.0.113.25' };
+
+  const response = {
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value; },
+    writeHead(status, headers = {}) {
+      this.statusCode = status;
+      Object.assign(this.headers, headers);
+      this.headersSent = true;
+    },
+    end(bodyText = '') {
+      this.body = bodyText;
+      this.writableEnded = true;
+    },
+  };
+
+  const pending = dashboard.handleAdminRequest(request, response, dependencies);
+  if (body) {
+    request.emit('data', Buffer.from(body));
+    request.emit('end');
+  }
+  await pending;
+  return response;
 }
 
 before(async () => {
@@ -57,6 +88,14 @@ test('the existing level curve stays intact for current players', () => {
   assert.equal(db.xpForLevel(10), 5000);
 });
 
+test('successful gameplay XP is doubled while the existing level curve is unchanged', () => {
+  assert.deepEqual(cfg.XP_PER_ACTION, {
+    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 10, duel: 6, quest: 10, rob: 6,
+    scavenge: 6, candyraid: 6, harvest: 6, trickortreat: 4, daily: 6, collect: 6,
+  });
+  assert.equal(db.xpForLevel(10), 5000);
+});
+
 test('world events run every 90 minutes and cap payouts with one 39k winner', () => {
   assert.equal(cfg.WORLD_EVENT_INTERVAL_MS, 90 * 60 * 1000);
   assert.equal(cfg.WORLD_EVENT_MAIN_REWARD, 39000);
@@ -86,6 +125,11 @@ test('world events run every 90 minutes and cap payouts with one 39k winner', ()
     assert.equal(soloResult.rewards.length, 1);
     assert.equal(soloResult.rewards[0].amount, 39000);
     assert.equal(soloResult.totalReward, 39000);
+
+    economy.startWorldEvent(cfg.WORLD_EVENT_CHANNEL_ID, { title: 'Evento cancelable', description: 'Prueba.' });
+    assert.equal(economy.hasWorldEvent(), true);
+    assert.equal(economy.cancelWorldEvent(), true);
+    assert.equal(economy.hasWorldEvent(), false);
   } finally {
     Math.random = originalRandom;
   }
@@ -298,8 +342,8 @@ test('gameplay activities award their configured XP and dungeon XP requires a cl
     const clearUser = db.getUser('dungeon-xp-clear-test');
     const clear = economy.doDungeon(clearUser);
     assert.equal(clear.success, true);
-    assert.equal(clear.activity.xp, 67);
-    assert.equal(clearUser.xp, 67);
+    assert.equal(clear.activity.xp, 160);
+    assert.equal(clearUser.xp, 160);
 
     Math.random = () => 0.99;
     const failedUser = db.getUser('dungeon-xp-fail-test');
@@ -390,11 +434,129 @@ test('dashboard does not expose its admin page without a session', async () => {
   assert.equal(response.headers['Cache-Control'], 'no-store');
 });
 
+test('dashboard can spawn a world event only from an authenticated CSRF-protected admin session', async () => {
+  const previousSecret = process.env.DASHBOARD_SECRET;
+  const secret = 'dashboard-event-test-secret-1234567890';
+  process.env.DASHBOARD_SECRET = secret;
+  let spawnCalls = 0;
+  const dependencies = {
+    cfg,
+    db,
+    client: {},
+    ui,
+    getWorldEventStatus: () => false,
+    spawnWorldEvent: async () => {
+      spawnCalls += 1;
+      return { ok: true };
+    },
+  };
+
+  try {
+    const login = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/login',
+      body: new URLSearchParams({ secret }).toString(),
+    }, dependencies);
+    assert.equal(login.statusCode, 303);
+    const cookie = login.headers['Set-Cookie'].split(';', 1)[0];
+
+    const panel = await sendDashboardRequest({ method: 'GET', url: '/admin', cookie }, dependencies);
+    assert.equal(panel.statusCode, 200);
+    assert.match(panel.body, /action="\/admin\/world-event\/spawn"/);
+    assert.match(panel.body, /Iniciar evento ahora/);
+    const csrf = panel.body.match(/name="csrf" value="([a-f0-9]+)"/)?.[1];
+    assert.ok(csrf);
+
+    const unauthorized = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      body: new URLSearchParams({ csrf }).toString(),
+    }, dependencies);
+    assert.equal(unauthorized.headers.Location, '/admin');
+    assert.equal(spawnCalls, 0);
+
+    const invalidCsrf = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf: 'invalid' }).toString(),
+    }, dependencies);
+    assert.equal(invalidCsrf.headers.Location, '/admin?notice=bad_csrf');
+    assert.equal(spawnCalls, 0);
+
+    const spawned = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf }).toString(),
+    }, dependencies);
+    assert.equal(spawned.headers.Location, '/admin?notice=world_event_started');
+    assert.equal(spawnCalls, 1);
+
+    const activeDependencies = {
+      ...dependencies,
+      getWorldEventStatus: () => true,
+      spawnWorldEvent: async () => ({ error: 'already_active' }),
+    };
+    const activePanel = await sendDashboardRequest({ method: 'GET', url: '/admin', cookie }, activeDependencies);
+    assert.match(activePanel.body, /Hay un evento activo o iniciándose/);
+    assert.match(activePanel.body, /<button type="submit" disabled>/);
+    const alreadyActive = await sendDashboardRequest({
+      method: 'POST',
+      url: '/admin/world-event/spawn',
+      cookie,
+      body: new URLSearchParams({ csrf }).toString(),
+    }, activeDependencies);
+    assert.equal(alreadyActive.headers.Location, '/admin?notice=world_event_active');
+  } finally {
+    if (previousSecret === undefined) delete process.env.DASHBOARD_SECRET;
+    else process.env.DASHBOARD_SECRET = previousSecret;
+  }
+});
+
 test('work and harvest keep distinct 5-minute and 3-minute intervals; rob waits 10 minutes', () => {
   assert.equal(cfg.COOLDOWN_POLICIES.work.intervalMs, 5 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.harvest.intervalMs, 3 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.rob.intervalMs, 10 * 60 * 1000);
   assert.equal(cfg.COOLDOWN_POLICIES.rob.restMs, 10 * 60 * 1000);
+});
+
+test('rob randomly steals 10–70% of victim cash and never makes either balance negative', () => {
+  const originalRandom = Math.random;
+  const attempt = (suffix, pctRoll) => {
+    const robber = db.getUser(`rob-upper-bound-${suffix}`);
+    const target = db.getUser(`rob-target-upper-bound-${suffix}`);
+    robber.cash = 0;
+    robber.cooldowns = {};
+    robber.cooldownCycles = {};
+    robber.effects = {};
+    target.cash = 10000;
+    target.cooldowns = {};
+    target.effects = {};
+    const rolls = [0, pctRoll, 0, 0.99];
+    Math.random = () => (rolls.length ? rolls.shift() : 0.99);
+    const result = economy.attemptRob(robber, target);
+    return { result, robber, target };
+  };
+  try {
+    assert.equal(cfg.ROB_STEAL_PCT_MIN, 0.10);
+    assert.equal(cfg.ROB_STEAL_PCT_MAX, 0.70);
+    const maxRob = attempt('max', 0.999999);
+    assert.equal(maxRob.result.success, true);
+    assert.equal(maxRob.result.amount, 7000);
+    assert.equal(maxRob.target.cash, 3000);
+    assert.equal(maxRob.robber.cash, 7000);
+    assert.ok(maxRob.target.cash >= 0 && maxRob.robber.cash >= 0);
+
+    const minRob = attempt('min', 0);
+    assert.equal(minRob.result.success, true);
+    assert.equal(minRob.result.amount, 1000);
+    assert.equal(minRob.target.cash, 9000);
+    assert.equal(minRob.robber.cash, 1000);
+    assert.ok(minRob.target.cash >= 0 && minRob.robber.cash >= 0);
+  } finally {
+    Math.random = originalRandom;
+  }
 });
 
 test('chat messages no longer earn passive Candys', () => {
@@ -405,7 +567,7 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('global leaderboard uses Discord user syntax without sending any pings', () => {
+test('global leaderboard prints names literally without Discord mentions or pings', () => {
   const guildMemberId = '123456789012345678';
   const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
@@ -414,57 +576,41 @@ test('global leaderboard uses Discord user syntax without sending any pings', ()
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, new RegExp(`<@${guildMemberId}>`));
-  assert.match(rendered, new RegExp(`<@${globalUserId}>`));
+  assert.match(rendered, /@Guild Nick/);
+  assert.match(rendered, /@Global Name/);
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, /Unknown-user/i);
+  assert.doesNotMatch(rendered, /<@!?[0-9]{17,20}>/);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });
 
-test('leaderboard resolves current-page members and global users before using a neutral fallback', async () => {
+test('leaderboard resolves visible names from cache and storage without REST requests', () => {
   const memberId = '123456789012345678';
   const globalId = '234567890123456789';
-  const laterPageId = '345678901234567890';
-  const memberLookups = [];
-  const userLookups = [];
-  const resolved = await resolveLeaderboardEntries([
+  const savedId = '345678901234567890';
+  const laterPageId = '456789012345678901';
+  let savedNameCalls = 0;
+  const entries = [
     { id: memberId, value: 500 },
     { id: globalId, value: 300 },
+    { id: savedId, value: 200 },
     { id: laterPageId, value: 100 },
-  ], {
-    guild: {
-      members: {
-        cache: new Map(),
-        async fetch(id) {
-          memberLookups.push(id);
-          if (id === memberId) return { displayName: 'Guild Nick' };
-          throw new Error('Not a member of this guild');
-        },
-      },
-    },
-    users: {
-      cache: new Map(),
-      async fetch(id) {
-        userLookups.push(id);
-        if (id === globalId) return { globalName: 'Global Name', username: 'global_user' };
-        throw new Error('User unavailable');
-      },
-    },
+  ];
+  const resolved = resolveLeaderboardEntries(entries, {
+    guild: { members: { cache: new Map([[memberId, { displayName: 'Guild Nick' }]]), fetch: () => assert.fail('must not fetch guild members') } },
+    users: { cache: new Map([[globalId, { globalName: 'Global Name' }]]), fetch: () => assert.fail('must not fetch Discord users') },
     page: 0,
-    pageSize: 2,
-    getSavedName: () => '',
+    pageSize: 3,
+    getSavedName: (id) => { savedNameCalls += 1; return id === savedId ? 'Saved Name' : ''; },
   });
-
   assert.equal(resolved[0].displayName, 'Guild Nick');
   assert.equal(resolved[0].isGuildMember, true);
   assert.equal(resolved[1].displayName, 'Global Name');
   assert.equal(resolved[1].isGuildMember, false);
-  assert.equal(resolved[2].displayName, 'Jugador sin nombre');
-  assert.deepEqual(memberLookups, [memberId, globalId]);
-  assert.deepEqual(userLookups, [globalId]);
+  assert.equal(resolved[2].displayName, 'Saved Name');
+  assert.deepEqual(resolved[3], entries[3]);
+  assert.equal(savedNameCalls, 3);
 });
-
 test('Discord message and interaction IDs are processed at most once per process', async () => {
   const eventId = '1430000000000000000';
   assert.equal(await db.claimDiscordEvent('message', eventId), true);
@@ -473,14 +619,17 @@ test('Discord message and interaction IDs are processed at most once per process
   assert.equal(await db.claimDiscordEvent('interaction', eventId), false);
 });
 
-test('duel acceptance acknowledges before fetching the other member', () => {
+test('component interactions acknowledge before database and network work', () => {
   const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
-  const acceptStart = indexSource.indexOf("if (action === 'accept') {", indexSource.indexOf("if (ns === 'duel')"));
-  const acceptEnd = indexSource.indexOf('\n      }\n    }', acceptStart);
-  assert.ok(acceptStart >= 0 && acceptEnd > acceptStart);
-  const acceptHandler = indexSource.slice(acceptStart, acceptEnd);
-  const acknowledgeAt = acceptHandler.indexOf('await interaction.deferUpdate();');
-  const fetchAt = acceptHandler.indexOf('await interaction.guild.members.fetch');
-  assert.ok(acknowledgeAt >= 0 && fetchAt > acknowledgeAt);
-  assert.doesNotMatch(acceptHandler, /interaction\.update\(/);
+  const listenerStart = indexSource.indexOf("client.on('interactionCreate'");
+  const listener = indexSource.slice(listenerStart);
+  const acknowledgementBranch = listener.indexOf("const usesPrivateReply = ['shopopen', 'shopbuy', 'shopactivate'].includes(ns);");
+  const claimAt = listener.indexOf("await db.claimDiscordEvent('interaction', interaction.id)");
+  const memberFetchAt = listener.indexOf('await interaction.guild.members.fetch');
+  assert.ok(listenerStart >= 0 && acknowledgementBranch >= 0);
+  assert.ok(claimAt > acknowledgementBranch);
+  assert.ok(memberFetchAt > claimAt);
+  assert.match(listener.slice(acknowledgementBranch, claimAt), /await interaction\.deferReply/);
+  assert.match(listener.slice(acknowledgementBranch, claimAt), /await interaction\.deferUpdate/);
+  assert.doesNotMatch(listener, /interaction\.update\(/);
 });

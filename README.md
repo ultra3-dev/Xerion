@@ -97,9 +97,9 @@ a partir del cierre exacto del evento. `xn daily` da el bono de cierre de
 50.000 Candys en el último día UTC del evento, solo si se reclama antes del
 cierre y el cooldown permite reclamarlo.
 
-`xn top` muestra el top global paginado de ricos o endeudados. Los puestos con
-IDs de Discord se representan como `<@ID>` sin notificar ni hacer ping a esas
-personas.
+`xn top` muestra el top global paginado de ricos o endeudados. Usa nombres
+guardados o ya disponibles en caché como texto literal `@nombre`, sin menciones ni
+notificaciones; si no hay un nombre disponible, muestra `Jugador sin nombre`.
 
 ## Render
 
