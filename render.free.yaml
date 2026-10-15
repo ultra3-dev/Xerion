@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  PERFIL OPCIONAL DE AHORRO — Render plan FREE (≈ US$0 de instancia).
+#
+#  NO es el predeterminado: render.yaml sigue usando Starter. Este archivo solo sirve si QUIERES bajar el costo y
+#  aceptas las contrapartidas (ver docs/COSTOS.md):
+#    · el servicio puede reiniciarse/suspenderse y tarda en despertar (el keep-alive lo mitiga, no lo garantiza);
+#    · CPU mucho menor (≈ 0.1): los comandos y el dibujo del blackjack serán más lentos;
+#    · 750 horas gratis al mes por workspace (un solo servicio 24/7 cabe justo).
+#  Usarlo cambia la facturación: aplícalo tú desde el panel de Render (New → Blueprint) o cambia el plan del
+#  servicio a Free a mano. El bot NO cambia nada por su cuenta.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  - type: web
+    name: halloween-economy-bot
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: KEEP_ALIVE
+        value: "on"
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DASHBOARD_SECRET
+        sync: false

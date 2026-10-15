@@ -33,7 +33,14 @@ async function main() {
     assert.equal(Object.keys(users).length, totalUsers, 'all synthetic profiles should exist');
     assert.equal(users['synthetic-0'].stats.totalWorked, 1);
     assert.equal(users['synthetic-0'].stats.totalHarvested, 1);
-    assert.equal(users['synthetic-0'].xp, 6, 'successful work and harvest should award their configured XP');
+    // Desde v1.1.0 el XP es aleatorio dentro de un rango acotado (nivel 0): work + harvest suman entre ambos rangos.
+    // (En main 8a8d56a esta aserción esperaba 6 y ya fallaba: el XP fijo era 6 + 6 = 12.)
+    const work = economy.xpRange('work');
+    const harvest = economy.xpRange('harvest');
+    assert.ok(
+      users['synthetic-0'].xp >= work.min + harvest.min && users['synthetic-0'].xp <= work.max + harvest.max,
+      'successful work and harvest should award XP inside their configured ranges',
+    );
     assert.ok(users['synthetic-9999'].cash > 0);
 
     console.log(JSON.stringify({

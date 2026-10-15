@@ -67,10 +67,10 @@ after(async () => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-test('the release exposes exactly 50 prefix command handlers', () => {
+test('the release exposes exactly 55 prefix command handlers (aliases not counted)', () => {
   const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   const handlerCount = (indexSource.match(/commands\.[A-Za-z0-9_]+\s*=/g) || []).length;
-  assert.equal(handlerCount, 50);
+  assert.equal(handlerCount, 55);
 });
 
 test('the configured event window matches the supplied Unix timestamps exactly', () => {
@@ -88,11 +88,16 @@ test('the existing level curve stays intact for current players', () => {
   assert.equal(db.xpForLevel(10), 5000);
 });
 
-test('successful gameplay XP is doubled while the existing level curve is unchanged', () => {
-  assert.deepEqual(cfg.XP_PER_ACTION, {
-    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 10, duel: 6, quest: 10, rob: 6,
+test('base gameplay XP preserves main values except for the balanced boss reward; the level curve is unchanged', () => {
+  // XP_PER_ACTION es ahora el XP BASE (promedio al nivel 0); `boss` sube para corregir su desbalance por cooldown.
+  const expectedBaseValues = {
+    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 150, duel: 6, quest: 10, rob: 6,
     scavenge: 6, candyraid: 6, harvest: 6, trickortreat: 4, daily: 6, collect: 6,
-  });
+  };
+  for (const [action, base] of Object.entries(expectedBaseValues)) {
+    assert.equal(cfg.XP_PER_ACTION[action], base, `${action} base XP must stay as configured for this release`);
+  }
+  assert.deepEqual(Object.keys(cfg.XP_PER_ACTION).sort(), [...Object.keys(expectedBaseValues), 'train', 'interest'].sort());
   assert.equal(db.xpForLevel(10), 5000);
 });
 
@@ -307,9 +312,12 @@ test('successful actions award materials and progress one-time quest objectives'
   Math.random = () => 0;
   Date.now = () => currentTime;
   try {
+    // Con Math.random() = 0 el XP sorteado es el mínimo del rango a ese nivel.
+    const workXp = economy.xpRangeAtLevel('work', db.getLevel(1000)).min;
+    const questXp = economy.xpRangeAtLevel('quest', db.getLevel(1000 + workXp)).min;
     const activity = economy.recordActivity(user, 'work');
-    assert.equal(activity.xp, cfg.XP_PER_ACTION.work + cfg.XP_PER_ACTION.quest);
-    assert.equal(user.xp, 1000 + cfg.XP_PER_ACTION.work + cfg.XP_PER_ACTION.quest);
+    assert.equal(activity.xp, workXp + questXp);
+    assert.equal(user.xp, 1000 + workXp + questXp);
     assert.equal(activity.materials.length, 1);
     assert.equal(user.materials[activity.materials[0].id], 2);
     assert.equal(activity.questProgress.completed, true);
@@ -327,13 +335,14 @@ test('successful actions award materials and progress one-time quest objectives'
   }
 });
 
-test('gameplay activities award their configured XP and dungeon XP requires a clear', () => {
-  for (const [action, amount] of Object.entries(cfg.XP_PER_ACTION)) {
+test('gameplay activities award XP inside their bounded range and dungeon XP requires a clear', () => {
+  for (const action of Object.keys(cfg.XP_PER_ACTION)) {
     const user = db.getUser(`xp-activity-${action}`);
     const beforeXp = user.xp;
+    const range = economy.xpRangeAtLevel(action, db.getLevel(beforeXp));
     const activity = economy.recordActivity(user, action);
-    assert.equal(activity.xp, amount, `${action} should award its configured XP`);
-    assert.equal(user.xp, beforeXp + amount, `${action} should persist its XP`);
+    assert.ok(activity.xp >= range.min && activity.xp <= range.max, `${action} should award XP inside ${range.min}-${range.max}`);
+    assert.equal(user.xp, beforeXp + activity.xp, `${action} should persist its XP`);
   }
 
   const originalRandom = Math.random;
@@ -342,8 +351,8 @@ test('gameplay activities award their configured XP and dungeon XP requires a cl
     const clearUser = db.getUser('dungeon-xp-clear-test');
     const clear = economy.doDungeon(clearUser);
     assert.equal(clear.success, true);
-    assert.equal(clear.activity.xp, 160);
-    assert.equal(clearUser.xp, 160);
+    assert.equal(clear.activity.xp, economy.xpRange('dungeon').min);
+    assert.equal(clearUser.xp, economy.xpRange('dungeon').min);
 
     Math.random = () => 0.99;
     const failedUser = db.getUser('dungeon-xp-fail-test');

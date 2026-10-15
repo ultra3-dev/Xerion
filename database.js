@@ -3,8 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = process.env.ECONOMY_DATA_FILE || path.join(DATA_DIR, 'economy.json');
+const DATA_FILE = process.env.ECONOMY_DATA_FILE || path.join(__dirname, 'data', 'economy.json');
+const DATA_DIR = path.dirname(DATA_FILE); // con ECONOMY_DATA_FILE (p. ej. en pruebas) no se crea data/ dentro del repositorio
 const PG_TABLE = 'public.xerion_economy_users';
 const PG_CODE_TABLE = 'public.xerion_redeem_codes';
 const PG_REDEMPTION_TABLE = 'public.xerion_redeem_redemptions';
@@ -86,6 +86,7 @@ async function saveLocalDB() {
     if (!dirty) return true;
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
     const tempFile = `${DATA_FILE}.tmp`;
+    for (const user of Object.values(db.users)) ensureShape(user); // nunca se escribe Infinity/NaN/valores inseguros
     fs.writeFileSync(tempFile, JSON.stringify(db, null, 2));
     fs.renameSync(tempFile, DATA_FILE);
     dirty = false;
@@ -109,6 +110,7 @@ async function savePostgresDB() {
   for (const id of ids) {
     const user = db.users[id];
     if (!user) continue;
+    ensureShape(user); // nunca se escribe Infinity/NaN/valores inseguros
     const snapshot = JSON.stringify(user);
     if (persistedSnapshots.get(id) !== snapshot) changed.push({ id, snapshot });
   }
@@ -384,17 +386,23 @@ function defaultUser() {
   };
 }
 
+// Saldos y XP siempre finitos, no negativos y dentro del rango de enteros seguros de JavaScript.
+function clampBalance(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value));
+}
+
 // Rellena campos nuevos en usuarios creados por versiones anteriores del bot,
 // para que nunca truene por un campo que no existía todavía (sin errores).
 function ensureShape(user) {
   for (const key of ['cash', 'bank', 'debt', 'xp', 'classChangedAt', 'bountyOn', 'createdAt']) {
     if (!Number.isFinite(user[key])) user[key] = key === 'createdAt' ? Date.now() : 0;
   }
-  user.cash = Math.max(0, user.cash);
-  user.bank = Math.max(0, user.bank);
-  user.debt = Math.max(0, user.debt);
+  user.cash = clampBalance(user.cash);
+  user.bank = clampBalance(user.bank);
+  user.debt = clampBalance(user.debt);
   if (typeof user.displayName !== 'string') user.displayName = '';
-  user.xp = Math.max(0, user.xp);
+  user.xp = clampBalance(user.xp);
   if (!user.cooldowns || typeof user.cooldowns !== 'object' || Array.isArray(user.cooldowns)) user.cooldowns = {};
   if (!user.cooldownCycles || typeof user.cooldownCycles !== 'object' || Array.isArray(user.cooldownCycles)) user.cooldownCycles = {};
   if (!user.inventory || typeof user.inventory !== 'object' || Array.isArray(user.inventory)) user.inventory = {};
@@ -429,6 +437,11 @@ function getUser(id) {
     attachUserId(id, db.users[id]);
   }
   return ensureShape(db.users[id]);
+}
+
+// ID de Discord asociado a un perfil cargado (undefined si el objeto no viene de la base).
+function getUserId(user) {
+  return user ? userIds.get(user) : undefined;
 }
 
 function getAllUsers() {
@@ -945,6 +958,16 @@ function addMaterial(user, materialId, qty = 1) {
   markDirty(user);
 }
 
+function removeMaterial(user, materialId, qty = 1) {
+  if (!user.materials || typeof user.materials !== 'object' || Array.isArray(user.materials)) return false;
+  if (!Number.isSafeInteger(qty) || qty < 1) return false;
+  if (!user.materials[materialId] || user.materials[materialId] < qty) return false;
+  user.materials[materialId] -= qty;
+  if (user.materials[materialId] <= 0) delete user.materials[materialId];
+  markDirty(user);
+  return true;
+}
+
 // ---------- Armas (permanentes, no se consumen) ----------
 
 function hasWeapon(user, weaponId) {
@@ -957,10 +980,19 @@ function addWeapon(user, weaponId) {
   markDirty(user);
 }
 
+// Quita un arma del perfil; si estaba equipada, la desequipa (nunca queda un arma equipada sin poseerla).
+function removeWeapon(user, weaponId) {
+  if (!Array.isArray(user.weapons) || !user.weapons.includes(weaponId)) return false;
+  user.weapons = user.weapons.filter((id) => id !== weaponId);
+  if (user.equippedWeapon === weaponId) user.equippedWeapon = null;
+  markDirty(user);
+  return true;
+}
+
 module.exports = {
   loadDB, saveDB, closeDB, markDirty, startAutoSave,
   claimDiscordEvent,
-  getUser, getAllUsers, getTotal, resetUser,
+  getUser, getUserId, getAllUsers, getTotal, resetUser, clampBalance,
   createRedeemCode, listRedeemCodes, deleteRedeemCode, redeemCode,
   createResetToken, deleteResetToken, consumeResetTokenAndResetAll,
   clamp, fmt, randomInt, randomFloat, formatDuration,
@@ -968,6 +1000,6 @@ module.exports = {
   cleanEffects, getStacks, getEffectRemaining, applyPotionEffect, consumeRevive,
   isOnCooldown, getCooldownRemaining, setCooldown,
   consumeCooldownUse,
-  addInventory, removeInventory, addMaterial,
-  hasWeapon, addWeapon,
+  addInventory, removeInventory, addMaterial, removeMaterial,
+  hasWeapon, addWeapon, removeWeapon,
 };

@@ -7,6 +7,8 @@ const {
   SeparatorSpacingSize,
   SectionBuilder,
   ThumbnailBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -63,6 +65,19 @@ function payload(containers, extra = {}) {
 function progressBar(fraction, length = 12) {
   const filled = Math.round(db.clamp(fraction, 0, 1) * length);
   return '█'.repeat(filled) + '░'.repeat(Math.max(0, length - filled));
+}
+
+// ---------- Dueño del bot: saldo "∞" SOLO visual ----------
+// En la base de datos el dueño guarda siempre números finitos y seguros; el símbolo ∞ existe únicamente
+// al dibujar sus vistas de saldo (Cash, Bank y Total). Nunca se convierte en valor guardado.
+
+function isOwnerDisplay(cfg, who) {
+  const id = who && typeof who === 'object' ? who.id : who;
+  return id !== undefined && id !== null && String(id) === String(cfg.OWNER_ID);
+}
+
+function formatBalance(cfg, who, value) {
+  return isOwnerDisplay(cfg, who) ? '∞' : db.fmt(value);
 }
 
 // ---------- Botones "solo para ti" ----------
@@ -135,6 +150,8 @@ function debtCard(cfg, title, body, footer) {
 
 function balanceCard(cfg, member, dbUser, extra = {}) {
   const total = db.getTotal(dbUser);
+  const isOwner = isOwnerDisplay(cfg, member);
+  const show = (value) => formatBalance(cfg, member, value);
   const c = container(cfg.COLORS.DEFAULT);
   const section = new SectionBuilder()
     .addTextDisplayComponents(text(`# 🍬 Balance de ${member.displayName}`))
@@ -142,9 +159,9 @@ function balanceCard(cfg, member, dbUser, extra = {}) {
   c.addSectionComponents(section);
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(
-    `💸 **Cash:** ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}\n`
-    + `🏦 **Bank:** ${db.fmt(dbUser.bank)}${cfg.CANDY_EMOJI}\n`
-    + `📊 **Total:** ${db.fmt(total)}${cfg.CANDY_EMOJI}`,
+    `💸 **Cash:** ${show(dbUser.cash)}${cfg.CANDY_EMOJI}\n`
+    + `🏦 **Bank:** ${show(dbUser.bank)}${cfg.CANDY_EMOJI}\n`
+    + `📊 **Total:** ${show(total)}${cfg.CANDY_EMOJI}`,
   ));
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(`💀 **Debt:** -${db.fmt(dbUser.debt)}${cfg.CANDY_EMOJI}`));
@@ -153,14 +170,14 @@ function balanceCard(cfg, member, dbUser, extra = {}) {
   const cls = dbUser.class ? economy.classDef(dbUser.class) : null;
   const lvl = economy.getLevelInfo(dbUser);
   const lines = [
-    `🏆 **Rank:** #${db.fmt(extra.rank || 0)}${cls ? ` · ${cls.emoji} **${cls.name}**` : ' · 🎭 sin clase (`xn class`)'}`,
+    `🏆 **Rank:** ${isOwner ? 'fuera del ranking global' : `#${db.fmt(extra.rank || 0)}`}${cls ? ` · ${cls.emoji} **${cls.name}**` : ' · 🎭 sin clase (`xn class`)'}`,
     `⭐ **Nivel ${lvl.level}** ${progressBar(lvl.progress)} \`${db.fmt(lvl.xp - lvl.currentFloor)}/${db.fmt(lvl.nextCeil - lvl.currentFloor)} XP\``,
   ];
   if (extra.activeCount) lines.push(`🧪 **Pociones activas:** ${extra.activeCount} — mira \`xn inventory\``);
   if (dbUser.bountyOn > 0) lines.push(`🎯 **¡Tienes ${db.fmt(dbUser.bountyOn)}${cfg.CANDY_EMOJI} de recompensa sobre tu cabeza!**`);
   c.addTextDisplayComponents(text(lines.join('\n')));
 
-  if (extra.nextGoal) {
+  if (extra.nextGoal && !isOwner) {
     c.addSeparatorComponents(sep());
     c.addTextDisplayComponents(text(`-# 🎯 Próxima meta: **${extra.nextGoal.name}** — te faltan ${db.fmt(extra.nextGoal.missing)}${cfg.CANDY_EMOJI}`));
   }
@@ -171,6 +188,8 @@ function balanceCard(cfg, member, dbUser, extra = {}) {
 
 function profileCard(cfg, member, dbUser, rank, activePotionLines) {
   const total = db.getTotal(dbUser);
+  const isOwner = isOwnerDisplay(cfg, member);
+  const show = (value) => formatBalance(cfg, member, value);
   const c = container(cfg.COLORS.GOLD);
   const section = new SectionBuilder()
     .addTextDisplayComponents(text(`# 🎃 Perfil de ${member.displayName}`))
@@ -179,12 +198,12 @@ function profileCard(cfg, member, dbUser, rank, activePotionLines) {
   c.addSeparatorComponents(sep());
   const cls = dbUser.class ? economy.classDef(dbUser.class) : null;
   const lvl = economy.getLevelInfo(dbUser);
-  const badge = dbUser.debt > 0 ? '🩸 Endeudado con la bruja' : (rank === 1 ? '👑 El más rico del cementerio' : '🎃 Espíritu de Halloween');
+  const badge = isOwner ? '👑 Dueño del bot' : dbUser.debt > 0 ? '🩸 Endeudado con la bruja' : (rank === 1 ? '👑 El más rico del cementerio' : '🎃 Espíritu de Halloween');
   c.addTextDisplayComponents(text(
     `${badge}\n`
-    + `💸 **Cash:** ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI} · 🏦 **Bank:** ${db.fmt(dbUser.bank)}${cfg.CANDY_EMOJI}\n`
-    + `📊 **Total:** ${db.fmt(total)}${cfg.CANDY_EMOJI} · 💀 **Debt:** -${db.fmt(dbUser.debt)}${cfg.CANDY_EMOJI}\n`
-    + `**Puesto en el ranking:** #${rank}\n`
+    + `💸 **Cash:** ${show(dbUser.cash)}${cfg.CANDY_EMOJI} · 🏦 **Bank:** ${show(dbUser.bank)}${cfg.CANDY_EMOJI}\n`
+    + `📊 **Total:** ${show(total)}${cfg.CANDY_EMOJI} · 💀 **Debt:** -${db.fmt(dbUser.debt)}${cfg.CANDY_EMOJI}\n`
+    + `**Puesto en el ranking:** ${isOwner ? 'fuera del ranking global' : `#${rank}`}\n`
     + `${cls ? `${cls.emoji} **Clase:** ${cls.name}` : '🎭 **Clase:** ninguna'} · ⭐ **Nivel:** ${lvl.level}`,
   ));
   if (activePotionLines && activePotionLines.length) {
@@ -398,13 +417,20 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser, page = 0) {
   const totalPages = Math.max(1, Math.ceil(cfg.EVENT_SHOP.length / pageSize));
   const currentPage = db.clamp(Number.isFinite(page) ? Math.trunc(page) : 0, 0, totalPages - 1);
   const start = currentPage * pageSize;
+  const statuses = economy.getEventRoleStatuses(dbUser || {});
   cfg.EVENT_SHOP.slice(start, start + pageSize).forEach((r, i, pageRoles) => {
     const roleIndex = start + i;
     const roleOwned = !!(member && member.roles && member.roles.cache && member.roles.cache.has(r.roleId));
-    const purchased = !!(dbUser && Array.isArray(dbUser.eventRolesPurchased) && dbUser.eventRolesPurchased.includes(r.roleId));
-    const activeBenefit = !!(dbUser && Array.isArray(dbUser.eventRolesActivated) && dbUser.eventRolesActivated.includes(r.roleId));
-    const disabled = activeBenefit || !active;
-    const label = activeBenefit ? 'Activado' : (purchased ? 'Activar' : 'Comprar');
+    const { status, wouldPay, best } = statuses[roleIndex];
+    const purchased = status !== 'available';
+    const disabled = status === 'active' || status === 'obtained' || !active;
+    const labels = {
+      available: ['Comprar', '🛒', ButtonStyle.Success],
+      purchased: ['Activar', '🔓', ButtonStyle.Success],
+      active: ['Activado', '✅', ButtonStyle.Secondary],
+      obtained: ['Obtenido', '🏅', ButtonStyle.Secondary],
+    };
+    const [label, buttonEmoji, buttonStyle] = labels[status];
     const action = purchased ? 'shopactivate' : 'shopbuy';
     const recipe = Object.entries(r.requirements || {})
       .map(([id, quantity]) => {
@@ -413,15 +439,21 @@ function eventShopContainer(cfg, now, member, invokerId, dbUser, page = 0) {
       })
       .join(' · ');
     const cooldown = db.formatDuration(r.collectCooldownMs || cfg.COOLDOWNS.collect);
+    const stateLine = {
+      active: '\n✅ **Activado** — este rol es el que paga tu `collect`',
+      obtained: `\n🏅 **Obtenido** — ya no paga ingresos: tu mejor rol activado es <@&${best?.roleId}>`,
+      purchased: wouldPay ? '\n🔓 Comprado — actívalo para cobrar su ingreso' : `\n⚠️ Comprado — no sumará ingresos mientras tengas activado <@&${best?.roleId}>`,
+      available: '',
+    }[status];
     const section = new SectionBuilder()
       .addTextDisplayComponents(text(
         `**${roleIndex + 1}.** <@&${r.roleId}>${roleOwned && !purchased ? ' · ya tienes el rol; falta comprarlo aquí' : ''}\n`
         + `🧾 Compra **${db.fmt(r.price)}**${cfg.CANDY_EMOJI} · 🔓 Activación **${db.fmt(Math.ceil(r.price / 2))}**${cfg.CANDY_EMOJI}\n`
         + `🎁 **${db.fmt(r.collectReward)}**${cfg.CANDY_EMOJI} por \`${cfg.PREFIX} collect\` cada **${cooldown}**\n`
-        + `🧱 ${recipe}`,
+        + `🧱 ${recipe}${stateLine}`,
       ))
       .setButtonAccessory(
-        lockedButton(action, r.id, `${invokerId}:${currentPage}`, label, activeBenefit ? ButtonStyle.Secondary : ButtonStyle.Success, activeBenefit ? '✅' : (purchased ? '🔓' : '🛒'))
+        lockedButton(action, r.id, `${invokerId}:${currentPage}`, label, buttonStyle, buttonEmoji)
           .setDisabled(disabled),
       );
     c.addSectionComponents(section);
@@ -449,6 +481,14 @@ function inventoryContainer(cfg, member, dbUser, invokerId = member?.id, page = 
       return `${p.emoji} **${p.name}** \`x${qty}\` — usa \`xn use ${p.id}\``;
     }).filter(Boolean);
     c.addTextDisplayComponents(text(lines.join('\n') || 'No tienes pociones guardadas.'));
+  }
+  // Artículos de la Tienda del Evento comprados pero todavía sin activar (solo lo realmente comprado).
+  const pendingEvent = economy.getPendingEventItems(dbUser, new Date());
+  if (pendingEvent.length) {
+    const pendingLines = pendingEvent.map((item) => `🎫 **${item.name}** — ⏳ \`pendiente de activar\` · ${item.eventEnded
+      ? 'el evento terminó, ya no se puede activar'
+      : `activar cuesta **${db.fmt(item.activationCost)}**${cfg.CANDY_EMOJI} (\`xn eventshop\`)`}`);
+    c.addTextDisplayComponents(text(`**⏳ Pendientes de activar · Tienda del Evento**\n${pendingLines.join('\n')}`));
   }
   c.addSeparatorComponents(sep());
   const ownedMaterials = cfg.MATERIALS
@@ -669,27 +709,104 @@ function cardBox(cardStr) {
   ];
 }
 
+// Máximo de cartas por fila: con hasta 15 cartas en mesa, las manos largas se parten en varias filas
+// para que el bloque no se desborde en pantallas angostas.
+const BLACKJACK_CARDS_PER_ROW = 5;
+
 function cardRow(cards, hideLast) {
   const display = hideLast ? [...cards.slice(0, -1), '??'] : cards;
-  const boxes = display.map(cardBox);
-  const rendered = [0, 1, 2, 3].map((i) => boxes.map((b) => b[i]).join(' ')).join('\n');
+  const chunks = [];
+  for (let i = 0; i < display.length; i += BLACKJACK_CARDS_PER_ROW) chunks.push(display.slice(i, i + BLACKJACK_CARDS_PER_ROW));
+  const rendered = chunks
+    .map((chunk) => {
+      const boxes = chunk.map(cardBox);
+      return [0, 1, 2, 3].map((i) => boxes.map((b) => b[i]).join(' ')).join('\n');
+    })
+    .join('\n');
   return `\`\`\`\n${rendered}\n\`\`\``;
 }
 
+const BLACKJACK_QUIPS = {
+  start: [
+    'Un murciélago reparte las cartas con las alas.',
+    'La banca sonríe desde las sombras y baraja despacio.',
+    'Las velas parpadean: la mesa está servida.',
+  ],
+  hit: [
+    'La carta cae sobre el fieltro con un susurro.',
+    'Un fantasma te desliza otra carta por debajo de la mesa.',
+    'El cuervo de la banca asiente, esperando tu movimiento.',
+  ],
+  blackjack: [
+    '¡Veinte y uno de entrada! Hasta los esqueletos aplauden.',
+    'La Bruja resopla: nadie gana tan rápido… ¡y sin trampa!',
+  ],
+  win: [
+    'La calabaza de la banca se rajó: ¡la mano es tuya!',
+    'El fantasma del casino te hace una reverencia.',
+  ],
+  lose: [
+    'La banca se ríe con carcajada de ultratumba.',
+    'Tus Candys vuelan hacia el caldero de la casa.',
+  ],
+  bust: [
+    '¡Te pasaste! La calabaza se comió tu mano.',
+    'Veintiuno era el límite… y el fantasma lo sabía.',
+  ],
+  push: [
+    'Empate: ni la banca ni tú ceden terreno.',
+    'Las cartas se miran fijamente… y nadie parpadea.',
+  ],
+  limit: [
+    'La mesa se llenó: no caben más cartas, la mano se cierra.',
+  ],
+};
+
+// `rng` inyectable para que las pruebas sean deterministas.
+function blackjackQuip(kind, rng = Math.random) {
+  const list = BLACKJACK_QUIPS[kind];
+  if (!list || !list.length) return '';
+  return list[Math.floor(rng() * list.length)];
+}
+
+// Texto alternativo de la imagen (lectores de pantalla y vista previa): describe las manos tal como están en mesa.
+function blackjackAlt(game, hideDealer) {
+  const dealerCards = hideDealer ? [...game.dealer.slice(0, -1), '?'] : game.dealer;
+  const dealerPoints = hideDealer ? `${economy.handValue(game.dealer.slice(0, -1))}+?` : String(economy.handValue(game.dealer));
+  return `Mesa de blackjack. Dealer (${dealerPoints}): ${dealerCards.join(' ')}. Tú (${economy.handValue(game.player)}): ${game.player.join(' ')}.`.slice(0, 1000);
+}
+
+// `image` = { name, alt } → el tablero es la imagen adjunta (canvas); sin `image` se usa el tablero de texto.
 function blackjackCard(cfg, member, game, {
-  hideDealer = false, footer = '', color = null,
+  hideDealer = false, footer = '', color = null, quip = '', image = null,
 } = {}) {
   const c = container(color || cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text(`# 🃏 Blackjack — ${member.displayName}`));
+  if (quip) c.addTextDisplayComponents(text(`-# ${quip}`));
   c.addSeparatorComponents(sep());
   const dealerVal = hideDealer ? '❓' : economy.handValue(game.dealer);
-  c.addTextDisplayComponents(text(`**🂠 Dealer** — \`${dealerVal} pts\``));
-  c.addTextDisplayComponents(text(cardRow(game.dealer, hideDealer)));
-  c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(`**🧑 Tu mano** — \`${economy.handValue(game.player)} pts\``));
-  c.addTextDisplayComponents(text(cardRow(game.player, false)));
-  c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(`💰 **Apuesta:** ${db.fmt(game.bet)}${cfg.CANDY_EMOJI}`));
+  if (image) {
+    c.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder().setURL(`attachment://${image.name}`).setDescription(image.alt || blackjackAlt(game, hideDealer)),
+      ),
+    );
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(
+      `🂠 **Dealer** \`${dealerVal} pts\` · 🧑 **Tú** \`${economy.handValue(game.player)} pts\`\n`
+      + `💰 **Apuesta:** ${db.fmt(game.bet)}${cfg.CANDY_EMOJI} · 🃏 **Cartas en mesa:** ${economy.bjCardsOnTable(game)}/${cfg.BLACKJACK_MAX_CARDS}`,
+    ));
+  } else {
+    c.addTextDisplayComponents(text(`**🂠 Dealer** — \`${dealerVal} pts\``));
+    c.addTextDisplayComponents(text(cardRow(game.dealer, hideDealer)));
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(`**🧑 Tu mano** — \`${economy.handValue(game.player)} pts\``));
+    c.addTextDisplayComponents(text(cardRow(game.player, false)));
+    c.addSeparatorComponents(sep());
+    c.addTextDisplayComponents(text(
+      `💰 **Apuesta:** ${db.fmt(game.bet)}${cfg.CANDY_EMOJI} · 🃏 **Cartas en mesa:** ${economy.bjCardsOnTable(game)}/${cfg.BLACKJACK_MAX_CARDS}`,
+    ));
+  }
   if (footer) {
     c.addSeparatorComponents(sep());
     c.addTextDisplayComponents(text(footer));
@@ -697,16 +814,38 @@ function blackjackCard(cfg, member, game, {
   return c;
 }
 
-function blackjackButtons(userId, disabled = false) {
+function blackjackDealingCard(cfg, member, bet) {
+  const c = container(cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text(`# 🃏 Blackjack — ${member.displayName}`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`🂠 La banca baraja y reparte las cartas…\n💰 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI}`));
+  return payload(c);
+}
+
+// `game` es opcional: si se pasa, el botón avisa cuando la próxima carta llena la mesa.
+function blackjackButtons(userId, disabled = false, game = null, maxCards = 15) {
+  const lastCard = !!game && economy.bjCardsOnTable(game) >= maxCards - 1;
   return row(
-    lockedButton('bj', 'hit', userId, 'Pedir', ButtonStyle.Primary, '🃏').setDisabled(disabled),
+    lockedButton('bj', 'hit', userId, lastCard ? 'Pedir (última carta)' : 'Pedir', ButtonStyle.Primary, '🃏').setDisabled(disabled),
     lockedButton('bj', 'stand', userId, 'Plantarse', ButtonStyle.Secondary, '✋').setDisabled(disabled),
   );
 }
 
 // ---------- Tragamonedas ----------
+// Todos los textos salen del objeto `result` que devolvió economy.slots (rodillos, multiplicador y premio
+// de la MISMA jugada): la animación solo los va revelando.
 
-function slotsFrame(cfg, reels, { spinning = false, payout = null, bet = null } = {}) {
+const SLOTS_KIND_LABELS = {
+  triple_rare: 'Tripleta rara', triple: 'Tripleta', double: 'Pareja', none: 'Sin combinación',
+};
+
+function bonusNote(bonusFactor) {
+  return bonusFactor > 1 ? ` · bono +${Math.round((bonusFactor - 1) * 100)}%` : '';
+}
+
+function slotsFrame(cfg, reels, {
+  spinning = false, payout = null, bet = null, multiplier = null, kind = null, bonusFactor = 1,
+} = {}) {
   let color = cfg.COLORS.DEFAULT;
   if (!spinning) color = payout > bet ? cfg.COLORS.SUCCESS : payout === bet ? cfg.COLORS.GOLD : cfg.COLORS.ERROR;
   const c = container(color);
@@ -718,17 +857,19 @@ function slotsFrame(cfg, reels, { spinning = false, payout = null, bet = null } 
     c.addTextDisplayComponents(text('-# Girando...'));
   } else {
     const diff = payout - bet;
+    const label = SLOTS_KIND_LABELS[kind] || 'Resultado';
+    const mult = multiplier === null || multiplier === undefined ? '' : ` (x${multiplier}${bonusNote(bonusFactor)})`;
     const line = diff > 0
-      ? `🎉 ¡Ganaste **+${db.fmt(diff)}**${cfg.CANDY_EMOJI}! (recibiste ${db.fmt(payout)}${cfg.CANDY_EMOJI})`
+      ? `🎉 **${label}**${mult} — ¡Ganaste **+${db.fmt(diff)}**${cfg.CANDY_EMOJI}! (recibiste ${db.fmt(payout)}${cfg.CANDY_EMOJI})`
       : diff === 0
-        ? `Recuperaste tu apuesta (${db.fmt(payout)}${cfg.CANDY_EMOJI}).`
-        : `Perdiste **-${db.fmt(bet)}**${cfg.CANDY_EMOJI}.`;
+        ? `**${label}**${mult} — Recuperaste tu apuesta (${db.fmt(payout)}${cfg.CANDY_EMOJI}).`
+        : `**${label}**${mult} — Perdiste **-${db.fmt(bet)}**${cfg.CANDY_EMOJI}.`;
     c.addTextDisplayComponents(text(line));
   }
   return payload(c);
 }
 
-// ---------- Dados / Ruleta / Rueda ----------
+// ---------- Dados / Ruleta / Rueda / Crash ----------
 
 function diceResultCard(cfg, bet, result) {
   const win = result.win;
@@ -746,24 +887,25 @@ function rouletteResultCard(cfg, bet, choiceId, result) {
   const c = container(win ? cfg.COLORS.SUCCESS : cfg.COLORS.ERROR);
   const choiceDef = cfg.ROULETTE_COLORS.find((cl) => cl.id === choiceId);
   const choiceLabel = choiceDef ? choiceDef.label : choiceId;
-  c.addTextDisplayComponents(text(`# 🎡 Ruleta Embrujada — cayó en ${result.landedLabel}`));
+  c.addTextDisplayComponents(text(`# 🎡 Ruleta Embrujada — cayó en ${result.landedLabel} (x${result.landedMult})`));
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(win
-    ? `¡Acertaste tu apuesta a **${choiceLabel}** (x${choiceDef.mult})! Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI}.`
+    ? `¡Acertaste tu apuesta a **${choiceLabel}** (x${result.multiplier}${bonusNote(result.bonusFactor)})! Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI} (recibiste ${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`
     : `Apostaste a **${choiceLabel}**. Perdiste **-${db.fmt(bet)}**${cfg.CANDY_EMOJI}.`));
   return payload(c);
 }
 
-function rouletteSpinCard(cfg, bet, frame) {
+// `position` es el índice del segmento bajo el puntero 🔻 (ver casino-view.roulettePlan).
+function rouletteSpinCard(cfg, bet, position, { final = false } = {}) {
   const colors = cfg.ROULETTE_COLORS;
-  const offset = frame % colors.length;
+  const offset = ((position % colors.length) + colors.length) % colors.length;
   const wheel = [...colors.slice(offset), ...colors.slice(0, offset)]
     .map((color, index) => `${index === 0 ? '🔻 ' : ''}${color.label}`)
     .join('  ·  ');
   const c = container(cfg.COLORS.GOLD);
   c.addTextDisplayComponents(text('# 🎡 Ruleta Embrujada'));
   c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(`🎲 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI}\n\n${wheel}\n\n-# La rueda está girando...`));
+  c.addTextDisplayComponents(text(`🎲 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI}\n\n${wheel}\n\n-# ${final ? '¡La rueda se detuvo!' : 'La rueda está girando...'}`));
   return payload(c);
 }
 
@@ -773,24 +915,170 @@ function wheelResultCard(cfg, bet, result) {
   const c = container(win ? cfg.COLORS.SUCCESS : isPush ? cfg.COLORS.GOLD : cfg.COLORS.ERROR);
   c.addTextDisplayComponents(text(`# 🎡 Rueda de la Fortuna Embrujada — x${result.multiplier}`));
   c.addSeparatorComponents(sep());
+  const note = bonusNote(result.bonusFactor);
   c.addTextDisplayComponents(text(win
-    ? `¡La rueda te sonrió! Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI} (recibiste ${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`
+    ? `¡La rueda te sonrió${note ? ` (${note.slice(3)})` : ''}! Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI} (recibiste ${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`
     : isPush
       ? `Recuperaste tu apuesta (${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`
       : `La rueda no te favoreció. Perdiste **-${db.fmt(bet - result.payout)}**${cfg.CANDY_EMOJI}.`));
   return payload(c);
 }
 
-function wheelSpinCard(cfg, bet, frame) {
+// `position` es el índice del segmento bajo el puntero 🔻 (ver casino-view.wheelPlan).
+function wheelSpinCard(cfg, bet, position, { final = false } = {}) {
   const segments = cfg.WHEEL_SEGMENTS;
-  const offset = frame % segments.length;
+  const offset = ((position % segments.length) + segments.length) % segments.length;
   const wheel = [...segments.slice(offset), ...segments.slice(0, offset)]
     .map((segment, index) => `${index === 0 ? '🔻 ' : ''}x${segment.mult}`)
     .join('  ·  ');
   const c = container(cfg.COLORS.GOLD);
   c.addTextDisplayComponents(text('# 🎡 Rueda de la Fortuna'));
   c.addSeparatorComponents(sep());
-  c.addTextDisplayComponents(text(`🎲 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI}\n\n${wheel}\n\n-# La rueda está girando...`));
+  c.addTextDisplayComponents(text(`🎲 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI}\n\n${wheel}\n\n-# ${final ? '¡La rueda se detuvo!' : 'La rueda está girando...'}`));
+  return payload(c);
+}
+
+const fmtMultiplier = (cents) => `x${(cents / 100).toFixed(2)}`;
+
+// `value` es el múltiplo que muestra la escoba en ese fotograma (ver casino-view.crashPlan).
+function crashFlightCard(cfg, bet, targetCents, value, { crashed = false } = {}) {
+  const c = container(crashed ? cfg.COLORS.ERROR : cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text('# 🧹 Crash — la escoba de la bruja'));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(
+    `🎲 **Apuesta:** ${db.fmt(bet)}${cfg.CANDY_EMOJI} · 🎯 **Objetivo:** ${fmtMultiplier(targetCents)}\n\n`
+    + `# 🧹 ${fmtMultiplier(Math.round(value * 100))}\n\n`
+    + `-# ${crashed ? '💥 ¡La escoba se estrelló!' : 'La escoba sigue subiendo...'}`,
+  ));
+  return payload(c);
+}
+
+function crashResultCard(cfg, bet, result) {
+  const crash = fmtMultiplier(result.crashCents);
+  const target = fmtMultiplier(result.targetCents);
+  const c = container(result.win ? cfg.COLORS.SUCCESS : cfg.COLORS.ERROR);
+  c.addTextDisplayComponents(text(`# 🧹 Crash — se estrelló en ${crash}`));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(result.win
+    ? `¡Saliste a tiempo! Tu objetivo **${target}**${bonusNote(result.bonusFactor)} quedó por debajo de ${crash}. Ganaste **+${db.fmt(result.net)}**${cfg.CANDY_EMOJI} (recibiste ${db.fmt(result.payout)}${cfg.CANDY_EMOJI}).`
+    : `La escoba cayó en **${crash}**, antes de tu objetivo **${target}**. Perdiste **-${db.fmt(bet)}**${cfg.CANDY_EMOJI}.`));
+  return payload(c);
+}
+
+// ---------- Comercio: xn give ----------
+
+function safeName(name) {
+  return String(name || 'Usuario').replace(/[\r\n]+/g, ' ').replace(/[*_~`|>\\]/g, '').trim().slice(0, 40) || 'Usuario';
+}
+
+function itemLine(offer) {
+  return `${offer.item.emoji} **${offer.item.name}** ×${db.fmt(offer.quantity)}`;
+}
+
+function giveUsage(cfg) {
+  const minutes = Math.round(cfg.TRADE_OFFER_TTL_MS / 60000);
+  return [
+    '**Uso:** `xn give @usuario <artículo> [cantidad|all] <precio total>`',
+    '**Artículos:** pociones guardadas, materiales y armas (por ID o nombre). Los roles del evento no se transfieren.',
+    '**Ejemplos**',
+    '`xn give @Ana amber_dust 5 5000` — 5 Amber Dust por 5,000 en total',
+    '`xn give @Ana luck 30000` — 1 Poción de Suerte por 30,000',
+    '`xn give @Ana rama 5000` — el arma Rama Afilada por 5,000',
+    `**Reglas:** el precio es el TOTAL y debe ser al menos el ${Math.round(cfg.TRADE_MIN_PRICE_RATIO * 100)}% del valor base total; solo la otra persona puede aceptar o rechazar; la oferta expira en ${minutes} min.`,
+  ].join('\n');
+}
+
+function tradeOfferCard(cfg, offer) {
+  const c = container(cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text('# 🤝 Oferta de intercambio'));
+  c.addSeparatorComponents(sep());
+  const unit = offer.quantity > 1 ? ` (≈ ${db.fmt(Math.round(offer.unitPrice))}${cfg.CANDY_EMOJI} c/u)` : '';
+  c.addTextDisplayComponents(text(
+    `<@${offer.recipientId}>, **${safeName(offer.names.seller)}** te ofrece:\n`
+    + `${itemLine(offer)}\n`
+    + `💰 **Precio total:** ${db.fmt(offer.price)}${cfg.CANDY_EMOJI}${unit}\n`
+    + `📈 Valor base: ${db.fmt(offer.baseValue)}${cfg.CANDY_EMOJI} c/u · mínimo permitido: ${db.fmt(offer.minPrice)}${cfg.CANDY_EMOJI}`,
+  ));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(`-# Expira <t:${Math.floor(offer.expiresAt / 1000)}:R> · solo ${safeName(offer.names.recipient)} puede aceptar o rechazar · el vendedor puede cancelar`));
+  c.addActionRowComponents(row(
+    lockedButton('trade', 'accept', `${offer.recipientId}:${offer.id}`, 'Aceptar', ButtonStyle.Success, '✅'),
+    lockedButton('trade', 'decline', `${offer.recipientId}:${offer.id}`, 'Rechazar', ButtonStyle.Danger, '❌'),
+    lockedButton('trade', 'cancel', `${offer.sellerId}:${offer.id}`, 'Cancelar', ButtonStyle.Secondary, '🛑'),
+  ));
+  // Solo se notifica al destinatario de la oferta; nadie más recibe pings.
+  return payload(c, { allowedMentions: { parse: [], users: [offer.recipientId] } });
+}
+
+const TRADE_FAILURE_TEXT = {
+  seller_insufficient: 'El vendedor ya no tiene esos artículos. No se movió nada.',
+  recipient_has_weapon: 'El comprador ya tiene esa arma. No se movió nada.',
+  balance_limit: 'La operación superaría el límite numérico permitido. No se movió nada.',
+  self: 'Una oferta no puede ser contigo mismo. No se movió nada.',
+};
+
+function tradeResultCard(cfg, offer, status) {
+  const seller = safeName(offer.names.seller);
+  const recipient = safeName(offer.names.recipient);
+  const price = `${db.fmt(offer.price)}${cfg.CANDY_EMOJI}`;
+  const titles = {
+    accepted: ['✅ Intercambio completado', cfg.COLORS.SUCCESS, `**${recipient}** recibió ${itemLine(offer)} de **${seller}** por **${price}**.`],
+    declined: ['❌ Oferta rechazada', cfg.COLORS.ERROR, `**${recipient}** rechazó la oferta de **${seller}** (${itemLine(offer)} por ${price}). No se movió nada.`],
+    cancelled: ['🛑 Oferta cancelada', cfg.COLORS.DEFAULT, `**${seller}** canceló su oferta (${itemLine(offer)} por ${price}). No se movió nada.`],
+    expired: ['⌛ Oferta expirada', cfg.COLORS.DEFAULT, `Nadie respondió a tiempo a la oferta de **${seller}** (${itemLine(offer)} por ${price}). No se movió nada.`],
+    failed: ['⚠️ Oferta cancelada', cfg.COLORS.ERROR, TRADE_FAILURE_TEXT[offer.reason] || 'La oferta ya no es válida. No se movió nada.'],
+  };
+  const [title, color, body] = titles[status] || titles.failed;
+  return payload(card(color, `# ${title}`, body));
+}
+
+function tradeErrorCard(cfg, error, details = {}) {
+  const fmt = db.fmt;
+  const C = cfg.CANDY_EMOJI;
+  const items = {
+    usage: ['Faltan datos', giveUsage(cfg)],
+    missing_recipient: ['Falta el destinatario', `Menciona a la persona que recibirá la oferta.\n\n${giveUsage(cfg)}`],
+    invalid_party: ['Oferta inválida', 'No pude identificar a las dos personas de la oferta.'],
+    self: ['No puedes ofrecerte cosas a ti mismo', 'Elige a otra persona.'],
+    bot: ['Los bots no comercian', 'Menciona a una persona real.'],
+    item_not_found: ['No encontré ese artículo', 'Usa el ID o el nombre exacto de `xn inventory` (pociones, materiales y armas).'],
+    ambiguous_item: ['Ese nombre es ambiguo', 'Usa el ID exacto del artículo.'],
+    not_transferable: ['Ese artículo no se puede transferir', 'Los roles y beneficios de la Tienda del Evento están ligados a tu cuenta.'],
+    invalid_quantity: ['Cantidad inválida', `Usa un número entero entre 1 y ${fmt(details.max || cfg.TRADE_MAX_QUANTITY)} (o \`all\`).`],
+    seller_insufficient: ['No tienes suficientes', `Necesitas **${fmt(details.need || 0)}** y solo tienes **${fmt(details.have || 0)}**.`],
+    invalid_price: ['Precio inválido', 'Indica el precio TOTAL como número entero positivo (ej: `5000` o `5k`).'],
+    price_too_low: ['Precio demasiado bajo', `Para esta oferta el mínimo es **${fmt(details.min || 0)}**${C} (la mitad del valor base total, ${fmt(details.base || 0)}${C}).`],
+    price_too_high: ['Precio demasiado alto', `El máximo por oferta es **${fmt(details.max || cfg.TRADE_MAX_PRICE)}**${C}.`],
+    recipient_has_weapon: ['Esa persona ya tiene esa arma', 'No tiene sentido venderle algo que ya posee.'],
+    seller_busy: ['Ya tienes una oferta pendiente', 'Espera la respuesta, deja que expire o cancélala con su botón.'],
+    recipient_busy: ['Esa persona tiene demasiadas ofertas pendientes', 'Inténtalo de nuevo en un momento.'],
+    recipient_insufficient: ['Esa persona no tiene Cash suficiente', `Necesita **${fmt(details.need || 0)}**${C} en Cash y tiene **${fmt(details.have || 0)}**${C}.`],
+    balance_limit: ['Límite numérico alcanzado', 'La operación superaría el valor máximo seguro que puede guardarse.'],
+  };
+  const [title, body] = items[error] || ['No se pudo crear la oferta', giveUsage(cfg)];
+  return errorCard(cfg, title, body);
+}
+
+// ---------- RPG: hoja de personaje ----------
+
+function skillsCard(cfg, member, sheet) {
+  const c = container(cfg.COLORS.GOLD);
+  c.addTextDisplayComponents(text(`# 🧬 Hoja de personaje — ${member.displayName}`));
+  c.addSeparatorComponents(sep());
+  const cls = sheet.class ? `${sheet.class.emoji} **${sheet.class.name}**` : '🎭 sin clase (`xn class`)';
+  const weapon = sheet.weapon ? `${sheet.weapon.emoji} **${sheet.weapon.name}**` : '🗡️ sin arma equipada (`xn armory`)';
+  const info = sheet.info;
+  c.addTextDisplayComponents(text(
+    `⭐ **Nivel ${sheet.level}** ${progressBar(info.progress)} \`${db.fmt(info.xp - info.currentFloor)}/${db.fmt(info.nextCeil - info.currentFloor)} XP\`\n`
+    + `${cls}\n${weapon}`,
+  ));
+  c.addSeparatorComponents(sep());
+  c.addTextDisplayComponents(text(sheet.bonuses.length
+    ? `**🎁 Bonos acumulados**\n${sheet.bonuses.map((b) => `+${Math.round(b.value * 100)}% ${b.label}`).join('\n')}`
+    : '**🎁 Bonos acumulados**\nNinguno todavía: elige clase (`xn class`), compra armas (`xn armory`) y sube de nivel.'));
+  c.addSeparatorComponents(sep());
+  const xpLines = sheet.xp.map((item) => `\`${item.action}\` ${db.fmt(item.min)}–${db.fmt(item.max)} XP`).join(' · ');
+  c.addTextDisplayComponents(text(`**📈 XP por acción a tu nivel** (×${sheet.factor.toFixed(2)})\n${xpLines}\n-# El XP se sortea en ese rango cada vez que la acción sale bien.`));
   return payload(c);
 }
 
@@ -842,6 +1130,7 @@ const HELP_CATEGORIES = {
       + '`deposit` (`dep`) `<cant|all>` — Guardar Candys en el banco\n'
       + '`withdraw` (`with`) `<cant|all>` — Sacar del banco (comisión hasta 10%)\n'
       + '`pay <@user> <cant|all>` — Enviar Candys a alguien\n'
+      + '`give` (`sell`, `trade`) `<@user> <artículo> [cant|all] <precio total>` — Ofrecer/vender pociones, materiales o armas (la otra persona acepta o rechaza con botones; precio ≥ 50% del valor base)\n'
       + '`debt` — Ver el detalle de tu deuda\n'
       + '`paydebt` (`pd`) `[cant]` — Pagarle a la bruja\n'
       + '`bounty` (`bnt`) `<@user> <cant>` — Poner precio a su cabeza\n'
@@ -858,6 +1147,7 @@ const HELP_CATEGORIES = {
       + '`beg` — Pedir Candys\n'
       + '`scavenge` (`scav`) — Buscar dulces escondidos\n'
       + '`harvest` — Cosechar Candys\n'
+      + '`interest` (`int`) — Cobrar intereses del Bank (1%, máx 2,500, cada 12 h)\n'
       + '`candyraid` (`raid`) — Salir de cabalgata de dulces con riesgo\n'
       + '`daily` — Recompensa diaria (¡bono especial el último día del evento!)\n'
       + '`collect` — Reclamar el ingreso del mejor rol activado; cada rol tiene su cooldown\n'
@@ -875,6 +1165,8 @@ const HELP_CATEGORIES = {
       + '`boss` — Enfrentar a La Calabaza Ancestral\n'
       + '`quest` — Misión de la Bruja\n'
       + '`level` — Ver tu nivel y experiencia\n'
+      + '`train` — Entrenar: solo XP (más una pieza de material a veces), cada 45 min\n'
+      + '`skills` (`sk`) — Hoja de personaje: bonos acumulados y XP por acción a tu nivel\n'
       + '`achievements` (`ach`) — Ver tus logros\n'
       + '`armory` (`arm`) — Tienda de armas\n'
       + '`equip <id>` — Equipar un arma que ya tengas',
@@ -887,7 +1179,8 @@ const HELP_CATEGORIES = {
       + '`blackjack <cant>` (`bj`) — Blackjack visual con botones\n'
       + '`dice <cant> <1-6>` — Adivina el dado (paga x5)\n'
       + '`roulette <cant|all> <color>` — Ruleta (red, black, purple, green); mínimo, sin máximo y con animación\n'
-      + '`wheel <cant|all>` — Rueda animada, sin máximo, con mínimo y cooldown',
+      + '`wheel <cant|all>` — Rueda animada, sin máximo, con mínimo y cooldown\n'
+      + '`crash <cant|all> <x2.5>` — La escoba de la bruja: elige tu múltiplo (1.10–50) y cobra si no se estrella antes',
   },
   tienda: {
     label: '🛒 Tiendas', emoji: '🛒',
@@ -921,7 +1214,7 @@ function helpContainer(cfg, categoryKey, invokerId) {
   const cat = HELP_CATEGORIES[key];
   const c = container(cfg.COLORS.DEFAULT);
   c.addTextDisplayComponents(text(`# 🍬 Ayuda — ${cat.label}`));
-  c.addTextDisplayComponents(text(`-# Prefijo: \`Xn\` (cualquier combinación de mayúsculas) · 50 comandos en total · v${cfg.BOT_VERSION}`));
+  c.addTextDisplayComponents(text(`-# Prefijo: \`Xn\` (cualquier combinación de mayúsculas) · 55 comandos en total · v${cfg.BOT_VERSION}`));
   c.addSeparatorComponents(sep());
   c.addTextDisplayComponents(text(cat.text));
   c.addSeparatorComponents(sep());
@@ -950,8 +1243,11 @@ module.exports = {
   privateShopPrompt,
   leaderboardContainer, cooldownsContainer, serverStatsContainer,
   worldEventStartCard, worldEventResultCard,
-  blackjackCard, blackjackButtons, slotsFrame,
+  blackjackCard, blackjackAlt, blackjackButtons, blackjackDealingCard, blackjackQuip, BLACKJACK_QUIPS, slotsFrame,
   diceResultCard, rouletteResultCard, rouletteSpinCard, wheelSpinCard, wheelResultCard,
+  crashFlightCard, crashResultCard,
+  tradeOfferCard, tradeResultCard, tradeErrorCard, giveUsage, skillsCard,
+  isOwnerDisplay, formatBalance, safeName,
   confirmCard, eventInfoCard,
   helpContainer, HELP_CATEGORIES,
   ButtonStyle,

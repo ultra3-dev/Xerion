@@ -25,21 +25,21 @@ const QUEST_MISSIONS = QUEST_ACTIONS.flatMap((action) => QUEST_TARGETS.map((targ
 
 // ============================================================
 //  CONFIGURACIÓN GENERAL — Bot de Economía de Halloween (Xn)
-//  v1.0.0 Halloween Release — RPG + RNG + Economy, 50 comandos.
+//  v1.1.0 — RPG + RNG + Economy, 55 comandos (base: v1.0.0 Halloween Release).
 //  Todos los números de esta economía viven aquí. Ajusta con
 //  confianza: nada del resto del código depende de valores
 //  "mágicos" fuera de este archivo.
 // ============================================================
 
 module.exports = {
-  BOT_VERSION: '1.0.0',
+  BOT_VERSION: '1.1.0',
 
   // --- Prefijo (se detecta sin importar mayúsculas: Xn, xn, xN, XN) ---
   PREFIX: 'xn',
 
   // --- Único usuario que puede usar comandos de administración ---
   // (no depende de permisos del servidor, es SOLO este ID)
-  OWNER_ID: '1064678074010058752',
+  OWNER_ID: '106467807401005875',
 
   // --- Moneda ---
   CANDY_EMOJI: '🍬',
@@ -87,6 +87,9 @@ module.exports = {
     wheel: 10 * 60 * 1000,
     harvest: 15 * 60 * 1000,
     collect: 24 * 60 * 60 * 1000,
+    interest: 12 * 60 * 60 * 1000,
+    train: 45 * 60 * 1000,
+    crash: 10 * 60 * 1000,
   },
 
   // Enfriamiento corto entre usos y descanso largo al completar el ciclo.
@@ -102,6 +105,7 @@ module.exports = {
     roulette: { intervalMs: 5 * 60 * 1000, uses: 5, restMs: 10 * 60 * 1000 },
     wheel: { intervalMs: 5 * 60 * 1000, uses: 5, restMs: 10 * 60 * 1000 },
     harvest: { intervalMs: 3 * 60 * 1000, uses: 5, restMs: 15 * 60 * 1000 },
+    crash: { intervalMs: 2 * 60 * 1000, uses: 5, restMs: 10 * 60 * 1000 },
   },
 
   // --- work ---
@@ -197,6 +201,11 @@ module.exports = {
   BOSS_NAME: 'La Calabaza Ancestral',
   BOSS_EMOJI: '🎃',
 
+  // --- Ganancia: intereses del banco (interest) ---
+  INTEREST_RATE: 0.01, // 1% del Bank por reclamo
+  INTEREST_MIN_BANK: 1000, // por debajo de esto el interés no se paga
+  INTEREST_MAX: 2500, // tope por reclamo (siempre < MAX_SINGLE_GAIN)
+
   // --- RPG: misión diaria (quest) ---
   QUEST_REWARD_MIN: 250,
   QUEST_REWARD_MAX: 600,
@@ -213,10 +222,21 @@ module.exports = {
   DAILY_EVENT_FINALE_BONUS: 50000,
 
   // --- RPG: experiencia y nivel ---
+  // XP_PER_ACTION es el XP BASE (promedio al nivel 0). Se conservan los valores de v1.0.0
+  // excepto `boss`, que sube de 10 a 150: su cooldown es 3 h frente a 1 h para `dungeon`.
+  // v1.1.0 también añade `train` e `interest`. El XP real de cada acción
+  // exitosa se sortea en un rango acotado alrededor de la base (±XP_SPREAD) y se multiplica
+  // por un factor que crece con el nivel (ver economy.xpRangeAtLevel). La curva de niveles
+  // (database.getLevel / xpForLevel) NO cambia.
   XP_PER_ACTION: {
-    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 10, duel: 6, quest: 10, rob: 6,
+    work: 6, beg: 4, crime: 6, hunt: 8, dungeon: 160, boss: 150, duel: 6, quest: 10, rob: 6,
     scavenge: 6, candyraid: 6, harvest: 6, trickortreat: 4, daily: 6, collect: 6,
+    train: 30, interest: 6,
   },
+  XP_SPREAD: 0.4, // rango = base × (1 ± 0.4) → mismo promedio que la base
+  // factor(nivel) = min(maxFactor, 1 + perLevel × nivel): el XP por acción crece con el nivel
+  // para que el costo (lineal) de cada nivel nuevo no vuelva la progresión más lenta.
+  XP_LEVEL_SCALE: { perLevel: 0.06, maxFactor: 4 },
 
   // --- RPG: clases permanentes (se eligen una vez al llegar al nivel 5) ---
   CLASSES: [
@@ -324,7 +344,21 @@ module.exports = {
   SLOTS_TRIPLE_RARE_MULT: 10,
   SLOTS_TRIPLE_MULT: 3,
   SLOTS_DOUBLE_MULT: 1,
-  BLACKJACK_TIMEOUT_MS: 90 * 1000,
+  BLACKJACK_TIMEOUT_MS: 150 * 1000, // tiempo para jugar una mano antes de plantarse automáticamente
+  // Máximo ESTRICTO de cartas en mesa (mano del jugador + mano de la banca, contando las iniciales).
+  BLACKJACK_MAX_CARDS: 15,
+  // Mesa dibujada con canvas propio (render/): imagen PNG indexada (~75 KB) con emojis Apple. Desactívalo con
+  // BLACKJACK_CANVAS=off y el bot usa el tablero de texto de siempre.
+  BLACKJACK_CANVAS: process.env.BLACKJACK_CANVAS !== 'off',
+
+  // --- Casino: crash (la escoba de la bruja) ---
+  // La escoba sube hasta estrellarse en un múltiplo sorteado; si el múltiplo que elegiste es
+  // menor o igual al punto de choque, cobras apuesta × múltiplo. RTP = 1 - CRASH_HOUSE_EDGE.
+  CRASH_MIN_BET: 100,
+  CRASH_HOUSE_EDGE: 0.04,
+  CRASH_MIN_TARGET: 1.1,
+  CRASH_MAX_TARGET: 50,
+  CRASH_MAX_MULTIPLIER: 1000,
 
   // --- Casino: dados ---
   DICE_PAYOUT_MULT: 5, // acertar el número exacto (1-6) paga 5x
@@ -442,17 +476,82 @@ module.exports = {
     { id: 'wyvern_scale', name: 'Wyvern Scale', emoji: '🐉' },
   ],
 
+  // --- Comercio entre jugadores (xn give) ---
+  // El precio es el TOTAL de la oferta (no por unidad) y debe ser >= la mitad del valor base
+  // total del artículo (pociones y armas: su precio de tienda; materiales: MATERIAL_BASE_VALUES).
+  TRADE_OFFER_TTL_MS: 2 * 60 * 1000, // las ofertas expiran a los 2 minutos
+  TRADE_MIN_PRICE_RATIO: 0.5,
+  TRADE_MAX_QUANTITY: 1000,
+  TRADE_MAX_PRICE: 1_000_000_000_000,
+  TRADE_MAX_PENDING_OUT: 1, // ofertas pendientes que puede tener un vendedor a la vez
+  TRADE_MAX_PENDING_IN: 3, // ofertas pendientes que puede recibir una persona a la vez
+  TRADE_RETENTION_MS: 10 * 60 * 1000, // cuánto se recuerda una oferta ya resuelta (para clics tardíos)
+
+  // Valor base por unidad = MATERIAL_BASE_UNIT × 2^nivel, donde "nivel" sale de la receta de
+  // la Tienda del Evento más cara que usa ese material (el costo de obtenerlo se mide por el rol
+  // que desbloquea). Los drops actuales son uniformes entre materiales, así que el valor refleja
+  // la demanda/rareza de uso, no una probabilidad de drop distinta. Materiales sin receta = nivel 0.
+  //   nivel 0 (sin receta)              400      nivel 3 (KING, ARISE)        3,200
+  //   nivel 1 (STAR X)                  800      nivel 4 (9K, 3K)             6,400
+  //   nivel 2 (AURA INFINITE, GOAT)   1,600      nivel 5 (OG, SPOOKY SEASON) 12,800
+  MATERIAL_BASE_UNIT: 400,
+  MATERIAL_BASE_VALUES: {
+    amber_dust: 1600, // nivel 2
+    bat_wing: 12800, // nivel 5
+    black_rose: 12800, // nivel 5
+    bone_fragment: 3200, // nivel 3
+    candle_wax: 1600, // nivel 2
+    candy_corn: 800, // nivel 1
+    charred_wood: 1600, // nivel 2
+    cobweb_silk: 400, // nivel 0
+    cursed_ash: 6400, // nivel 4
+    cursed_rune: 12800, // nivel 5
+    dark_essence: 12800, // nivel 5
+    demon_horn: 6400, // nivel 4
+    ectoplasm: 3200, // nivel 3
+    enchanted_leaf: 3200, // nivel 3
+    fang: 3200, // nivel 3
+    ghost_lantern: 6400, // nivel 4
+    grave_dirt: 800, // nivel 1
+    haunted_thread: 1600, // nivel 2
+    moon_shard: 6400, // nivel 4
+    nightshade: 3200, // nivel 3
+    obsidian: 6400, // nivel 4
+    phantom_feather: 12800, // nivel 5
+    pumpkin_seed: 800, // nivel 1
+    pumpkin_spice: 1600, // nivel 2
+    raven_feather: 3200, // nivel 3
+    rotten_flesh: 400, // nivel 0
+    silver_coin: 12800, // nivel 5
+    soul_crystal: 12800, // nivel 5
+    spectral_ink: 6400, // nivel 4
+    spider_silk: 1600, // nivel 2
+    star_fragment: 400, // nivel 0
+    sugar_skull: 800, // nivel 1
+    tombstone_chip: 3200, // nivel 3
+    trick_token: 3200, // nivel 3
+    twilight_moss: 1600, // nivel 2
+    void_tear: 12800, // nivel 5
+    witch_herb: 400, // nivel 0
+    wolf_claw: 1600, // nivel 2
+    wyvern_scale: 6400, // nivel 4
+  },
+
   // --- Tienda del Evento (roles) ---
+  // `collect` lo paga SOLO el mejor rol activado (mayor collectReward). v1.1.0 acortó el cooldown de los roles
+  // que menos pagan (STAR X 4h→3h, AURA INFINITE 8h→6h, GOAT 12h→11h, KING 18h→17h) para que ninguno
+  // rinda más por hora que el rol más alto: ingreso/hora = STAR X 4,000 · AURA/GOAT/KING/ARISE 5,000 ·
+  // 9K 4,444 · 3K 4,375 · OG 4,667 · SPOOKY SEASON 5,125.
   EVENT_SHOP: [
     { id: 'spookyseason', name: 'Spooky Season', roleId: '1551555280108658719', price: 10350000, collectReward: 369000, collectCooldownMs: 3 * 24 * 60 * 60 * 1000, requirements: { cursed_rune: 8, soul_crystal: 10, void_tear: 8, bat_wing: 12 } },
     { id: 'og', name: 'OG', roleId: '1489704431518744666', price: 6550000, collectReward: 280000, collectCooldownMs: 60 * 60 * 1000 * 60, requirements: { black_rose: 8, dark_essence: 8, silver_coin: 12, phantom_feather: 10 } },
     { id: '3k', name: '3K', roleId: '1489704434958077952', price: 4920000, collectReward: 210000, collectCooldownMs: 48 * 60 * 60 * 1000, requirements: { soul_crystal: 6, obsidian: 10, wyvern_scale: 8, spectral_ink: 8 } },
     { id: '9k', name: '9K', roleId: '1489704438489677994', price: 2810000, collectReward: 160000, collectCooldownMs: 36 * 60 * 60 * 1000, requirements: { demon_horn: 6, moon_shard: 8, ghost_lantern: 8, cursed_ash: 10 } },
     { id: 'arise', name: 'ARISE', roleId: '1531512361104572507', price: 1915000, collectReward: 120000, collectCooldownMs: 24 * 60 * 60 * 1000, requirements: { ectoplasm: 8, raven_feather: 8, nightshade: 10, tombstone_chip: 10 } },
-    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 85000, collectCooldownMs: 18 * 60 * 60 * 1000, requirements: { fang: 6, bone_fragment: 10, enchanted_leaf: 10, trick_token: 8 } },
-    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 55000, collectCooldownMs: 12 * 60 * 60 * 1000, requirements: { wolf_claw: 6, charred_wood: 8, spider_silk: 8, pumpkin_spice: 8 } },
-    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 30000, collectCooldownMs: 8 * 60 * 60 * 1000, requirements: { amber_dust: 5, candle_wax: 6, haunted_thread: 6, twilight_moss: 6 } },
-    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 12000, collectCooldownMs: 4 * 60 * 60 * 1000, requirements: { candy_corn: 4, grave_dirt: 5, pumpkin_seed: 5, sugar_skull: 4 } },
+    { id: 'king', name: 'KING', roleId: '1531508465174970518', price: 850000, collectReward: 85000, collectCooldownMs: 17 * 60 * 60 * 1000, requirements: { fang: 6, bone_fragment: 10, enchanted_leaf: 10, trick_token: 8 } },
+    { id: 'goat', name: 'GOAT', roleId: '1537232162246496346', price: 540000, collectReward: 55000, collectCooldownMs: 11 * 60 * 60 * 1000, requirements: { wolf_claw: 6, charred_wood: 8, spider_silk: 8, pumpkin_spice: 8 } },
+    { id: 'aurainfinite', name: 'AURA INFINITE', roleId: '1494579589752684614', price: 310000, collectReward: 30000, collectCooldownMs: 6 * 60 * 60 * 1000, requirements: { amber_dust: 5, candle_wax: 6, haunted_thread: 6, twilight_moss: 6 } },
+    { id: 'starx', name: 'STAR X', roleId: '1489704408538415184', price: 150000, collectReward: 12000, collectCooldownMs: 3 * 60 * 60 * 1000, requirements: { candy_corn: 4, grave_dirt: 5, pumpkin_seed: 5, sugar_skull: 4 } },
   ],
   // Instantes exactos del evento (UTC), independientes de la zona horaria del host.
   EVENT_START: new Date('2026-10-04T02:30:00.000Z'),

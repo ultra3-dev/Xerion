@@ -4,10 +4,10 @@ require('dotenv').config();
 const http = require('http');
 
 // ============================================================
-//  ÍNDICE — Cliente de Discord, listeners y los 50 comandos.
+//  ÍNDICE — Cliente de Discord, listeners y los 55 comandos.
 //  Prefijo: "xn" (sin distinguir mayúsculas). Toda la lógica de
 //  economía vive en economy.js; todo el render en ui.js.
-//  v1.0.0
+//  v1.1.0
 // ============================================================
 
 const {
@@ -15,11 +15,17 @@ const {
   GatewayIntentBits,
   MessageFlags,
   ActivityType,
+  AttachmentBuilder,
 } = require('discord.js');
 
 const cfg = require('./config');
 const db = require('./database');
 const economy = require('./economy');
+const trade = require('./trade');
+const casinoView = require('./casino-view');
+const keepAlive = require('./keepalive');
+const emojiAssets = require('./render/emoji');
+const { renderBlackjack, warmUp: warmUpBlackjackCanvas } = require('./render/blackjack-scene');
 const ui = require('./ui');
 const dashboard = require('./dashboard');
 const { resolveLeaderboardEntries } = require('./leaderboard-names');
@@ -44,6 +50,13 @@ const client = new Client({
 
 function stripMentionArgs(args) {
   return args.filter((a) => !/^<@!?\d+>$/.test(a));
+}
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+// Mensaje efímero (solo lo ve quien pulsó) para clics tardíos, repetidos o sin permiso.
+function ephemeralPayload(payload) {
+  return { ...payload, flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 };
 }
 
 // Solo este ID puede usar comandos de administración, sin importar
@@ -132,7 +145,7 @@ commands.balance = async (message, args, member, dbUser) => {
   const extra = {
     rank: economy.getRank(targetMember.id),
     activeCount: countActiveEffects(targetData),
-    nextGoal: computeNextGoal(targetMember, targetData),
+    nextGoal: economy.isOwnerId(targetMember.id) ? null : computeNextGoal(targetMember, targetData),
   };
   return message.channel.send(ui.balanceCard(cfg, targetMember, targetData, extra));
 };
@@ -175,6 +188,7 @@ commands.pay = async (message, args, member, dbUser) => {
   const targetData = db.getUser(targetMember.id);
   const result = economy.transfer(dbUser, targetData, amount);
   if (result.error === 'insufficient') return message.channel.send(ui.errorCard(cfg, 'No tienes suficiente Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'El destinatario superaría el límite seguro de saldo. No se movió nada.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'Cantidad inválida', `Usa \`${cfg.PREFIX} pay @usuario <cantidad|all>\`.`));
   return message.channel.send(ui.successCard(cfg, 'Transferencia enviada', `Le enviaste **${db.fmt(result.amount)}**${cfg.CANDY_EMOJI} a **${targetMember.displayName}**.`));
 };
@@ -235,6 +249,7 @@ commands.rob = async (message, args, member, dbUser) => {
   if (targetMember.user.bot) return message.channel.send(ui.errorCard(cfg, 'No puedes robar a un bot', 'Los bots no cargan Candys.'));
   const targetData = db.getUser(targetMember.id);
   const result = economy.attemptRob(dbUser, targetData);
+  if (result.error === 'target_owner') return message.channel.send(ui.errorCard(cfg, 'Objetivo intocable', 'El dueño del bot no puede ser víctima de robos.'));
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Espera un poco', `Todavía estás bajo sospecha. Intenta de nuevo en ${db.formatDuration(result.remaining)}.`));
   if (result.error === 'target_too_poor') return message.channel.send(ui.errorCard(cfg, 'Objetivo sin nada que robar', 'Esa persona no tiene suficiente Cash para valer la pena.'));
   if (result.error === 'target_protected') return message.channel.send(ui.errorCard(cfg, 'Objetivo protegido', `Ya lo robaron hace poco. Espera ${db.formatDuration(result.remaining)}.`));
@@ -280,10 +295,62 @@ commands.bounty = async (message, args, member, dbUser) => {
   if (!amount) return message.channel.send(ui.errorCard(cfg, 'Cantidad inválida', `Usa \`${cfg.PREFIX} bounty @usuario <cantidad>\` (mínimo ${db.fmt(cfg.BOUNTY_MIN)}${cfg.CANDY_EMOJI}).`));
   const targetData = db.getUser(targetMember.id);
   const result = economy.placeBounty(dbUser, targetData, amount);
+  if (result.error === 'target_owner') return message.channel.send(ui.errorCard(cfg, 'Objetivo intocable', 'No se pueden poner recompensas sobre el dueño del bot.'));
   if (result.error === 'too_small') return message.channel.send(ui.errorCard(cfg, 'Recompensa muy baja', `El mínimo es ${db.fmt(cfg.BOUNTY_MIN)}${cfg.CANDY_EMOJI}.`));
   if (result.error === 'insufficient') return message.channel.send(ui.errorCard(cfg, 'No tienes suficiente Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Espera un poco', `Podrás poner otra recompensa en ${db.formatDuration(result.remaining)}.`));
   return message.channel.send(ui.successCard(cfg, '🎯 Recompensa activada', `Pusiste **-${db.fmt(result.amount)}**${cfg.CANDY_EMOJI} de recompensa sobre **${targetMember.displayName}**. Quien lo robe con éxito se la lleva completa.\nRecompensa total acumulada sobre esa persona: **${db.fmt(result.totalBounty)}**${cfg.CANDY_EMOJI}.`));
+};
+
+commands.interest = async (message, args, member, dbUser) => {
+  const result = economy.doInterest(dbUser);
+  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Los intereses aún no maduran', `Podrás cobrar otra vez en ${db.formatDuration(result.remaining)}.`));
+  if (result.error === 'bank_too_low') return message.channel.send(ui.errorCard(cfg, 'Tu Bank es demasiado pequeño', `Necesitas al menos **${db.fmt(result.min)}**${cfg.CANDY_EMOJI} en el Bank para cobrar intereses (tienes ${db.fmt(result.bank)}${cfg.CANDY_EMOJI}). Guarda Candys con \`${cfg.PREFIX} deposit\`.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'El interés llevaría tu Cash por encima del límite seguro de saldo.'));
+  return message.channel.send(ui.successCard(cfg, 'Intereses cobrados', `${result.flavor}. Recibiste **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI} en Cash (${Math.round(result.rate * 100)}% de tu Bank, máximo ${db.fmt(cfg.INTEREST_MAX)}${cfg.CANDY_EMOJI}).${activityNotice(result.activity)}`));
+};
+
+// Oferta de venta/intercambio: xn give @usuario <artículo> [cantidad|all] <precio total>
+commands.give = async (message, args, member, dbUser) => {
+  const mentionToken = args.find((a) => /^<@!?\d+>$/.test(a));
+  const recipientId = mentionToken ? mentionToken.replace(/\D/g, '') : null;
+  const targetMember = recipientId ? message.mentions.members?.get(recipientId) : null;
+  if (!targetMember) return message.channel.send(ui.tradeErrorCard(cfg, 'missing_recipient'));
+  if (targetMember.id === message.author.id) return message.channel.send(ui.tradeErrorCard(cfg, 'self'));
+  if (targetMember.user.bot) return message.channel.send(ui.tradeErrorCard(cfg, 'bot'));
+  const parsed = trade.parseGiveArgs(stripMentionArgs(args));
+  if (parsed.error) return message.channel.send(ui.tradeErrorCard(cfg, parsed.error));
+
+  const created = trade.createOffer({
+    sellerId: message.author.id,
+    seller: dbUser,
+    recipientId: targetMember.id,
+    recipient: db.getUser(targetMember.id),
+    recipientIsBot: targetMember.user.bot,
+    itemQuery: parsed.itemQuery,
+    qtyToken: parsed.qtyToken,
+    priceToken: parsed.priceToken,
+    sellerName: member.displayName,
+    recipientName: targetMember.displayName,
+  });
+  if (created.error) return message.channel.send(ui.tradeErrorCard(cfg, created.error, created));
+
+  const { offer } = created;
+  let sent;
+  try {
+    sent = await message.channel.send(ui.tradeOfferCard(cfg, offer));
+  } catch (err) {
+    // Si la oferta no se pudo mostrar, se cancela para no dejar al vendedor bloqueado.
+    trade.respond(offer.id, message.author.id, 'cancel');
+    throw err;
+  }
+  const timer = setTimeout(async () => {
+    const expired = trade.expireOffer(offer.id);
+    if (!expired.expired) return; // ya se resolvió con los botones
+    await sent.edit(ui.tradeResultCard(cfg, expired.offer, 'expired')).catch(() => {});
+  }, cfg.TRADE_OFFER_TTL_MS + 250);
+  if (typeof timer.unref === 'function') timer.unref();
+  return sent;
 };
 
 // ---------- RPG ----------
@@ -358,6 +425,18 @@ commands.quest = async (message, args, member, dbUser) => {
 
 commands.level = async (message, args, member, dbUser) => message.channel.send(ui.levelCard(cfg, member, dbUser));
 
+commands.train = async (message, args, member, dbUser) => {
+  const result = economy.doTrain(dbUser);
+  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'Estás agotado', `Podrás entrenar otra vez en ${db.formatDuration(result.remaining)}.`));
+  return message.channel.send(ui.successCard(cfg, 'Entrenamiento completado', `${result.flavor}.${activityNotice(result.activity)}`));
+};
+
+commands.skills = async (message, args, member, dbUser) => {
+  const targetMember = message.mentions.members?.first() || member;
+  const targetData = targetMember.id === message.author.id ? dbUser : db.getUser(targetMember.id);
+  return message.channel.send(ui.skillsCard(cfg, targetMember, economy.getSkillSheet(targetData)));
+};
+
 commands.achievements = async (message, args, member, dbUser) => message.channel.send(ui.achievementsContainer(cfg, member, dbUser));
 
 commands.armory = async (message, args, member, dbUser) => message.channel.send(ui.armoryContainer(cfg, dbUser, message.author.id));
@@ -391,13 +470,117 @@ commands.slots = async (message, args, member, dbUser) => {
   const result = economy.slots(dbUser, bet);
   if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
-  const sent = await message.channel.send(ui.slotsFrame(cfg, ['🌀', '🌀', '🌀'], { spinning: true }));
-  const randomFrame = () => [0, 0, 0].map(() => cfg.SLOTS_SYMBOLS[Math.floor(Math.random() * cfg.SLOTS_SYMBOLS.length)].symbol);
-  await new Promise((r) => setTimeout(r, 700));
-  await sent.edit(ui.slotsFrame(cfg, randomFrame(), { spinning: true })).catch(() => {});
-  await new Promise((r) => setTimeout(r, 700));
-  await sent.edit(ui.slotsFrame(cfg, result.reels, { spinning: false, payout: result.payout, bet })).catch(() => {});
+  // La animación solo revela, rodillo por rodillo, lo que economy.slots ya sorteó y pagó.
+  const plan = casinoView.slotsPlan(result);
+  const sent = await message.channel.send(ui.slotsFrame(cfg, plan.frames[0], { spinning: true }));
+  for (const frame of plan.frames.slice(1)) {
+    await sleep(700);
+    await sent.edit(ui.slotsFrame(cfg, frame, { spinning: true })).catch(() => {});
+  }
+  await sleep(700);
+  await sent.edit(ui.slotsFrame(cfg, plan.final, {
+    spinning: false,
+    payout: result.payout,
+    bet,
+    multiplier: result.multiplier,
+    kind: result.kind,
+    bonusFactor: result.bonusFactor,
+  })).catch(() => {});
 };
+
+// ---------- Blackjack: mesa dibujada con canvas (render/) con respaldo al tablero de texto ----------
+
+let blackjackImageCounter = 0;
+
+// Copia inmutable de la mano: el render es asíncrono y la partida puede avanzar mientras se dibuja.
+function snapshotGame(game) {
+  return {
+    ...game, player: [...game.player], dealer: [...game.dealer], deck: [],
+  };
+}
+
+// Devuelve { name, file, alt } con la imagen PNG de la mesa, o null si el canvas está apagado o falla
+// (en ese caso el mensaje usa el tablero de texto de siempre: el juego nunca se rompe por una imagen).
+async function blackjackImage(snap, { hideDealer, resolution = null }) {
+  if (!cfg.BLACKJACK_CANVAS) return null;
+  try {
+    const rendered = await renderBlackjack({
+      player: snap.player,
+      dealer: snap.dealer,
+      hideDealer,
+      bet: snap.bet,
+      maxCards: cfg.BLACKJACK_MAX_CARDS,
+      result: resolution ? resolution.result : null,
+      playerBust: snap.status === 'bust',
+      dealerBust: !!resolution && economy.handValue(snap.dealer) > 21,
+      dealerBlocked: !!resolution && !!resolution.dealerBlocked,
+      net: resolution ? resolution.net : null,
+    });
+    blackjackImageCounter += 1;
+    const name = `blackjack-${Date.now().toString(36)}-${blackjackImageCounter}.png`;
+    const alt = ui.blackjackAlt(snap, hideDealer);
+    return { name, alt, file: new AttachmentBuilder(rendered.buffer, { name, description: alt }) };
+  } catch (err) {
+    console.error('[blackjack] El canvas falló; se usa el tablero de texto:', err.message);
+    return null;
+  }
+}
+
+function withImage(container, image) {
+  // attachments: [] reemplaza la imagen anterior al editar (y no estorba al enviar un mensaje nuevo).
+  return ui.payload(container, { files: image ? [image.file] : [], attachments: [] });
+}
+
+// Tablero de una mano EN JUEGO (carta oculta de la banca + botones). Devuelve null si una jugada más nueva
+// ya dibujó el tablero mientras este se renderizaba (evita que una imagen vieja pise a una nueva).
+async function blackjackPlayingPayload(member, game, { footer, quip, userId }) {
+  const snap = snapshotGame(game);
+  game.renderSeq = (game.renderSeq || 0) + 1;
+  const seq = game.renderSeq;
+  const image = await blackjackImage(snap, { hideDealer: true });
+  if (game.renderSeq !== seq) return null;
+  const c = ui.blackjackCard(cfg, member, snap, {
+    hideDealer: true, footer, quip, image,
+  });
+  c.addActionRowComponents(ui.blackjackButtons(userId, false, snap, cfg.BLACKJACK_MAX_CARDS));
+  return withImage(c, image);
+}
+
+// Tarjeta final de una mano resuelta (misma lógica para botones, límite de cartas, tiempo agotado y blackjack natural).
+async function blackjackFinalPayload(member, game, resolution, { timedOut = false } = {}) {
+  const prefix = timedOut ? '⏰ Se acabó el tiempo y te plantaste automáticamente. ' : '';
+  const money = (value) => `${db.fmt(value)}${cfg.CANDY_EMOJI}`;
+  let footer;
+  let quipKind = resolution.result;
+  if (game.status === 'bust') {
+    footer = `Te pasaste de 21. Perdiste **-${money(game.bet)}**.`;
+    quipKind = 'bust';
+  } else if (resolution.dealerBlocked) {
+    footer = `La mesa se llenó (${cfg.BLACKJACK_MAX_CARDS} cartas) antes de que la banca pudiera completar su mano: empate, recuperaste tu apuesta.`;
+    quipKind = 'limit';
+  } else if (resolution.result === 'blackjack') {
+    footer = `${prefix}¡Blackjack! +${money(resolution.net)}`;
+  } else if (resolution.result === 'win') {
+    footer = `${prefix}¡Ganaste! +${money(resolution.net)}`;
+  } else if (resolution.result === 'push') {
+    footer = `${prefix}Empate. Recuperaste tu apuesta.`;
+  } else {
+    footer = `${prefix}Perdiste **-${money(game.bet)}**.`;
+  }
+  if (resolution.limitReached && !resolution.dealerBlocked && game.status !== 'bust') {
+    footer += ` 🃏 Se alcanzó el límite de ${cfg.BLACKJACK_MAX_CARDS} cartas en mesa.`;
+  }
+  const colors = {
+    win: cfg.COLORS.SUCCESS, blackjack: cfg.COLORS.SUCCESS, push: cfg.COLORS.GOLD, lose: cfg.COLORS.ERROR,
+  };
+  const snap = snapshotGame(game);
+  game.renderSeq = (game.renderSeq || 0) + 1; // invalida cualquier render de "en juego" que siga en vuelo
+  const image = await blackjackImage(snap, { hideDealer: false, resolution });
+  const c = ui.blackjackCard(cfg, member, snap, {
+    hideDealer: false, footer, color: colors[resolution.result], quip: ui.blackjackQuip(quipKind), image,
+  });
+  return withImage(c, image);
+}
 
 commands.blackjack = async (message, args, member, dbUser) => {
   const bet = economy.parseAmount(args[0], dbUser.cash);
@@ -409,39 +592,33 @@ commands.blackjack = async (message, args, member, dbUser) => {
   if (startResult.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad válida.'));
   const { game } = startResult;
 
-  if (game.status === 'stood') {
-    const resolution = economy.bjResolve(dbUser, game);
-    const color = resolution.result === 'blackjack' ? cfg.COLORS.SUCCESS : cfg.COLORS.GOLD;
-    const footer = resolution.result === 'blackjack'
-      ? `¡Blackjack natural! Ganaste **+${db.fmt(resolution.net)}**${cfg.CANDY_EMOJI}.`
-      : 'Empate con el dealer. Recuperaste tu apuesta.';
-    const c = ui.blackjackCard(cfg, member, game, { hideDealer: false, footer, color });
-    return message.channel.send(ui.payload(c));
+  // Blackjack natural: la partida termina al instante y se paga ANTES de cualquier animación.
+  const natural = game.status === 'stood' ? economy.bjResolve(dbUser, game) : null;
+
+  // El temporizador se arma de inmediato: aunque el mensaje no pudiera enviarse, la mano siempre se cierra.
+  let sent = null;
+  if (!natural) {
+    setTimeout(async () => {
+      const current = economy.getBlackjack(message.author.id);
+      if (!current || current !== game) return; // ya se resolvió con los botones
+      const resolved = economy.bjStand(message.author.id);
+      if (!resolved) return;
+      const resolution = economy.bjResolve(dbUser, resolved);
+      if (sent) await sent.edit(await blackjackFinalPayload(member, resolved, resolution, { timedOut: true })).catch(() => {});
+    }, cfg.BLACKJACK_TIMEOUT_MS);
   }
 
-  const c = ui.blackjackCard(cfg, member, game, { hideDealer: true, footer: 'Usa los botones para jugar. Tienes 90 segundos.' });
-  c.addActionRowComponents(ui.blackjackButtons(message.author.id));
-  const sent = await message.channel.send(ui.payload(c));
-
-  setTimeout(async () => {
-    const current = economy.getBlackjack(message.author.id);
-    if (!current || current !== game) return; // ya se resolvió con los botones
-    const resolved = economy.bjStand(message.author.id);
-    if (!resolved) return;
-    const resolution = economy.bjResolve(dbUser, resolved);
-    const footerMap = {
-      win: `⏰ Se acabó el tiempo y te plantaste automáticamente. ¡Ganaste! +${db.fmt(resolution.net)}${cfg.CANDY_EMOJI}`,
-      blackjack: `⏰ Se acabó el tiempo. ¡Blackjack! +${db.fmt(resolution.net)}${cfg.CANDY_EMOJI}`,
-      push: '⏰ Se acabó el tiempo y te plantaste automáticamente. Empate, recuperaste tu apuesta.',
-      lose: `⏰ Se acabó el tiempo y te plantaste automáticamente. Perdiste **-${db.fmt(resolved.bet)}**${cfg.CANDY_EMOJI}.`,
-    };
-    const colorMap = {
-      win: cfg.COLORS.SUCCESS, blackjack: cfg.COLORS.SUCCESS, push: cfg.COLORS.GOLD, lose: cfg.COLORS.ERROR,
-    };
-    const c2 = ui.blackjackCard(cfg, member, resolved, { hideDealer: false, footer: footerMap[resolution.result], color: colorMap[resolution.result] });
-    await sent.edit(ui.payload(c2)).catch(() => {});
-  }, cfg.BLACKJACK_TIMEOUT_MS);
-
+  // Reparto animado: mientras "reparte" la banca se dibuja la mesa (el render queda oculto tras la animación).
+  sent = await message.channel.send(ui.blackjackDealingCard(cfg, member, bet));
+  const ready = natural
+    ? blackjackFinalPayload(member, game, natural)
+    : blackjackPlayingPayload(member, game, {
+      footer: `Usa los botones para jugar. Tienes ${Math.round(cfg.BLACKJACK_TIMEOUT_MS / 1000)} segundos.`,
+      quip: ui.blackjackQuip('start'),
+      userId: message.author.id,
+    });
+  const [view] = await Promise.all([ready, sleep(600)]);
+  if (view) await sent.edit(view).catch(() => {});
   return sent;
 };
 
@@ -469,12 +646,16 @@ commands.roulette = async (message, args, member, dbUser) => {
   if (bet > dbUser.cash) return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
   const result = economy.playRoulette(dbUser, bet, choice);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'La ruleta necesita enfriarse', `Podrás apostar otra vez en ${db.formatDuration(result.remaining)}.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'No se pudo apostar', 'Revisa el color y la apuesta mínima.'));
-  const sent = await message.channel.send(ui.rouletteSpinCard(cfg, bet, 0));
-  for (let frame = 1; frame <= 3; frame += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    await sent.edit(ui.rouletteSpinCard(cfg, bet, frame)).catch(() => {});
+  // El puntero avanza segmento a segmento y se detiene EXACTAMENTE en el color sorteado y pagado.
+  const plan = casinoView.roulettePlan(result);
+  const sent = await message.channel.send(ui.rouletteSpinCard(cfg, bet, plan.positions[0]));
+  for (let frame = 1; frame < plan.positions.length; frame += 1) {
+    await sleep(700);
+    await sent.edit(ui.rouletteSpinCard(cfg, bet, plan.positions[frame], { final: frame === plan.positions.length - 1 })).catch(() => {});
   }
+  await sleep(600);
   return sent.edit(ui.rouletteResultCard(cfg, bet, choice, result)).catch(() => sent);
 };
 
@@ -485,13 +666,41 @@ commands.wheel = async (message, args, member, dbUser) => {
   const result = economy.playWheel(dbUser, bet);
   if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'La rueda está girando', `Podrás jugar otra vez en ${db.formatDuration(result.remaining)}.`));
   if (result.error === 'insufficient') return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', 'Ingresa una cantidad mayor que cero.'));
-  const sent = await message.channel.send(ui.wheelSpinCard(cfg, bet, 0));
-  for (let frame = 1; frame <= 3; frame += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    await sent.edit(ui.wheelSpinCard(cfg, bet, frame)).catch(() => {});
+  // El puntero avanza segmento a segmento y se detiene EXACTAMENTE en el segmento sorteado y pagado.
+  const plan = casinoView.wheelPlan(result);
+  const sent = await message.channel.send(ui.wheelSpinCard(cfg, bet, plan.positions[0]));
+  for (let frame = 1; frame < plan.positions.length; frame += 1) {
+    await sleep(700);
+    await sent.edit(ui.wheelSpinCard(cfg, bet, plan.positions[frame], { final: frame === plan.positions.length - 1 })).catch(() => {});
   }
+  await sleep(600);
   return sent.edit(ui.wheelResultCard(cfg, bet, result)).catch(() => sent);
+};
+
+commands.crash = async (message, args, member, dbUser) => {
+  const usage = `Usa \`${cfg.PREFIX} crash <cantidad|all> <múltiplo>\`, por ejemplo \`${cfg.PREFIX} crash 1000 2.5\` (mínimo ${db.fmt(cfg.CRASH_MIN_BET)}${cfg.CANDY_EMOJI}; múltiplo entre x${cfg.CRASH_MIN_TARGET.toFixed(2)} y x${cfg.CRASH_MAX_TARGET.toFixed(2)}).`;
+  const bet = economy.parseAmount(args[0], dbUser.cash);
+  if (!bet) return message.channel.send(ui.errorCard(cfg, 'Apuesta inválida', usage));
+  if (bet < cfg.CRASH_MIN_BET) return message.channel.send(ui.errorCard(cfg, 'Apuesta por debajo del mínimo', `La apuesta mínima es **${db.fmt(cfg.CRASH_MIN_BET)}**${cfg.CANDY_EMOJI}.`));
+  if (economy.parseCrashTarget(args[1]) === null) return message.channel.send(ui.errorCard(cfg, 'Múltiplo inválido', usage));
+  if (bet > dbUser.cash) return message.channel.send(ui.errorCard(cfg, 'No tienes eso en Cash', `Tu Cash es ${db.fmt(dbUser.cash)}${cfg.CANDY_EMOJI}.`));
+  const result = economy.playCrash(dbUser, bet, args[1]);
+  if (result.error === 'cooldown') return message.channel.send(ui.errorCard(cfg, 'La escoba está en el taller', `Podrás volar otra vez en ${db.formatDuration(result.remaining)}.`));
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'Reduce la apuesta para que el premio se mantenga dentro del límite seguro de saldo.'));
+  if (result.error) return message.channel.send(ui.errorCard(cfg, 'No se pudo apostar', usage));
+  // La escoba sube por valores crecientes y se estrella EXACTAMENTE en el múltiplo sorteado y pagado.
+  const plan = casinoView.crashPlan(result);
+  const sent = await message.channel.send(ui.crashFlightCard(cfg, bet, result.targetCents, 1));
+  for (const value of plan.frames) {
+    await sleep(600);
+    await sent.edit(ui.crashFlightCard(cfg, bet, result.targetCents, value)).catch(() => {});
+  }
+  await sleep(600);
+  await sent.edit(ui.crashFlightCard(cfg, bet, result.targetCents, plan.finalValue, { crashed: true })).catch(() => {});
+  await sleep(600);
+  return sent.edit(ui.crashResultCard(cfg, bet, result)).catch(() => sent);
 };
 
 // ---------- Tiendas ----------
@@ -650,10 +859,14 @@ commands.collect = async (message, args, member, dbUser) => {
     return message.channel.send(ui.errorCard(cfg, 'Beneficio sin activar', `Compra los materiales y el rol desde \`${cfg.PREFIX} eventshop\`, y luego paga la activación. Tener el rol en Discord por sí solo no activa sus ingresos.`));
   }
   if (result.error === 'cooldown') {
-    return message.channel.send(ui.errorCard(cfg, 'Ya reclamaste el ingreso', `El cooldown de este rol termina en ${db.formatDuration(result.remaining)}.`));
+    return message.channel.send(ui.errorCard(cfg, 'Ya reclamaste el ingreso', `Tu mejor rol (**${result.role.name}**) podrá cobrar otra vez en ${db.formatDuration(result.remaining)}.`));
   }
+  if (result.error === 'balance_limit') return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande para procesar', 'El ingreso llevaría tu Cash por encima del límite seguro de saldo.'));
   if (result.error) return message.channel.send(ui.errorCard(cfg, 'No se pudo reclamar', 'El ingreso configurado no es válido. Avísale al equipo del bot.'));
-  return message.channel.send(ui.successCard(cfg, 'Ingreso del evento reclamado', `Tu rol **${result.role.name}** te entregó **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.\nEl ingreso se puede reclamar otra vez en **${db.formatDuration(result.cooldownMs)}**.${activityNotice(result.activity)}`));
+  const obtainedLine = result.obtained.length
+    ? `\n🏅 Obtenidos (sin ingreso): ${result.obtained.map((role) => `**${role.name}**`).join(', ')}.`
+    : '';
+  return message.channel.send(ui.successCard(cfg, 'Ingreso del evento reclamado', `Tu mejor rol activado, **${result.role.name}**, te entregó **+${db.fmt(result.reward)}**${cfg.CANDY_EMOJI}.\nEl ingreso se puede reclamar otra vez en **${db.formatDuration(result.cooldownMs)}**.${obtainedLine}${activityNotice(result.activity)}`));
 };
 
 commands.cooldowns = async (message, args, member, dbUser) => {
@@ -662,12 +875,13 @@ commands.cooldowns = async (message, args, member, dbUser) => {
     ['candyraid', '🎠 Candy Raid'], ['trickortreat', '🍬 Trick or Treat'],
     ['daily', '🎁 Daily'], ['collect', '💰 Collect'], ['rob', '🥷 Rob'], ['hunt', '🏹 Hunt'], ['duel', '⚔️ Duel'],
     ['dungeon', '🗺️ Dungeon'], ['boss', '🎃 Boss'], ['quest', '📜 Quest'],
-    ['roulette', '🎡 Roulette'], ['wheel', '🎡 Wheel'], ['bounty', '🎯 Bounty'],
+    ['roulette', '🎡 Roulette'], ['wheel', '🎡 Wheel'], ['crash', '🧹 Crash'], ['bounty', '🎯 Bounty'],
+    ['interest', '💹 Interest'], ['train', '🏋️ Train'],
   ];
   const lines = keys.map(([key, label]) => ({
     label: label.replace(/^[^\s]+\s/, ''),
     emoji: label.match(/^[^\s]+/)?.[0],
-    remaining: db.getCooldownRemaining(dbUser, key),
+    remaining: key === 'collect' ? economy.getCollectRemaining(dbUser) : db.getCooldownRemaining(dbUser, key),
   }));
   if (dbUser.activeQuest) {
     lines.push({
@@ -698,6 +912,9 @@ commands.addcandy = async (message, args, member, dbUser) => {
   const amount = economy.parseAmount(rest[0], Number.MAX_SAFE_INTEGER);
   if (!amount || !Number.isFinite(amount)) return message.channel.send(ui.errorCard(cfg, 'Cantidad inválida', 'Ingresa un número válido (no se acepta "all" aquí).'));
   const targetData = db.getUser(targetMember.id);
+  if (!economy.isSafeSum(targetData.cash, amount)) {
+    return message.channel.send(ui.errorCard(cfg, 'Saldo demasiado grande', `El Cash resultante superaría el límite seguro (${db.fmt(Number.MAX_SAFE_INTEGER)}). No se hicieron cambios.`));
+  }
   targetData.cash += amount;
   db.markDirty(targetData);
   return message.channel.send(ui.successCard(cfg, 'Candys añadidos', `Se le dieron **+${db.fmt(amount)}**${cfg.CANDY_EMOJI} en Cash a **${targetMember.displayName}**.`));
@@ -789,6 +1006,10 @@ const ALIASES = {
   rl: 'roulette',
   einfo: 'eventinfo',
   bnt: 'bounty',
+  sell: 'give',
+  trade: 'give',
+  int: 'interest',
+  sk: 'skills',
 };
 
 // ---------- Evento mundial aleatorio ----------
@@ -850,6 +1071,13 @@ client.once('ready', () => {
   db.startAutoSave();
   scheduleWorldEvents();
   serviceReady = true;
+  if (cfg.BLACKJACK_CANVAS) {
+    // Segundo plano: descarga los emojis Apple (si hay red) y calienta el canvas del blackjack.
+    // Si algo falla, el juego sigue con iconos vectoriales o con el tablero de texto.
+    emojiAssets.preload()
+      .then(() => warmUpBlackjackCanvas())
+      .catch((err) => console.error('[canvas] El calentamiento falló (se usarán los respaldos):', err.message));
+  }
 });
 
 client.on('messageCreate', async (message) => {
@@ -1024,80 +1252,99 @@ client.on('interactionCreate', async (interaction) => {
       if (!checkButtonOwner(interaction, allowedId)) return;
       const dbUser = db.getUser(allowedId);
       const { member } = interaction;
+      const staleGame = () => replyButton(interaction, ephemeralPayload(ui.infoCard(cfg, 'Partida terminada', 'Esta partida ya no está activa; no se repitió ningún efecto.')));
 
       if (action === 'hit') {
         const game = economy.bjHit(allowedId);
-        if (!game) return;
-        if (game.status === 'bust') {
-          economy.bjResolve(dbUser, game);
-          const c = ui.blackjackCard(cfg, member, game, { hideDealer: false, footer: `Te pasaste de 21. Perdiste **-${db.fmt(game.bet)}**${cfg.CANDY_EMOJI}.`, color: cfg.COLORS.ERROR });
-          return interaction.editReply(ui.payload(c));
+        if (!game) return staleGame();
+        if (game.status === 'bust' || game.status === 'stood') {
+          // Se pasó de 21 o la mesa llegó al límite de cartas: la mano se resuelve una sola vez.
+          const resolution = economy.bjResolve(dbUser, game);
+          return interaction.editReply(await blackjackFinalPayload(member, game, resolution));
         }
-        const c = ui.blackjackCard(cfg, member, game, { hideDealer: true, footer: 'Usa los botones para jugar.' });
-        c.addActionRowComponents(ui.blackjackButtons(allowedId));
-        return interaction.editReply(ui.payload(c));
+        const view = await blackjackPlayingPayload(member, game, { footer: 'Usa los botones para jugar.', quip: ui.blackjackQuip('hit'), userId: allowedId });
+        if (!view) return undefined; // una jugada más nueva ya redibujó el tablero
+        return interaction.editReply(view);
       }
 
       if (action === 'stand') {
         const game = economy.bjStand(allowedId);
-        if (!game) return;
+        if (!game) return staleGame();
         const resolution = economy.bjResolve(dbUser, game);
-        const footerMap = {
-          win: `¡Ganaste! +${db.fmt(resolution.net)}${cfg.CANDY_EMOJI}`,
-          blackjack: `¡Blackjack! +${db.fmt(resolution.net)}${cfg.CANDY_EMOJI}`,
-          push: 'Empate. Recuperaste tu apuesta.',
-          lose: `Perdiste **-${db.fmt(game.bet)}**${cfg.CANDY_EMOJI}.`,
-        };
-        const colorMap = {
-          win: cfg.COLORS.SUCCESS, blackjack: cfg.COLORS.SUCCESS, push: cfg.COLORS.GOLD, lose: cfg.COLORS.ERROR,
-        };
-        const c = ui.blackjackCard(cfg, member, game, { hideDealer: false, footer: footerMap[resolution.result], color: colorMap[resolution.result] });
-        return interaction.editReply(ui.payload(c));
+        return interaction.editReply(await blackjackFinalPayload(member, game, resolution));
       }
+    }
+
+    if (ns === 'trade') {
+      if (!checkButtonOwner(interaction, allowedId)) return;
+      // customId: trade:<accept|decline|cancel>:<idPermitido>:<idOferta>
+      const outcome = trade.respond(catalogType, interaction.user.id, action);
+      if (outcome.error === 'not_found') {
+        return interaction.editReply(ui.errorCard(cfg, 'Oferta no disponible', 'Esta oferta expiró o el bot se reinició. No se movió nada.'));
+      }
+      if (outcome.error === 'already_resolved') {
+        // Clic repetido o tardío: se vuelve a dibujar el estado final (sin repetir ningún efecto).
+        return interaction.editReply(ui.tradeResultCard(cfg, outcome.offer, outcome.status));
+      }
+      if (outcome.error === 'not_recipient' || outcome.error === 'not_seller' || outcome.error === 'invalid_action') {
+        return replyButton(interaction, ephemeralPayload(ui.errorCard(cfg, 'Este botón no es tuyo', 'Solo la persona indicada puede usarlo.')));
+      }
+      if (outcome.error === 'buyer_insufficient') {
+        return replyButton(interaction, ephemeralPayload(ui.errorCard(
+          cfg,
+          'No tienes suficiente Cash',
+          `Necesitas **${db.fmt(outcome.need)}**${cfg.CANDY_EMOJI} y tu Cash es ${db.fmt(outcome.have)}${cfg.CANDY_EMOJI}. Retira del Bank y pulsa Aceptar antes de que expire; no se movió nada.`,
+        )));
+      }
+      if (outcome.terminal) {
+        return interaction.editReply(ui.tradeResultCard(cfg, outcome.offer, 'failed'));
+      }
+      if (outcome.status === 'accepted') {
+        try { await db.saveDB(); } catch (saveError) { console.error('[trade] Guardado inmediato falló; el autoguardado reintentará:', saveError.message); }
+      }
+      return interaction.editReply(ui.tradeResultCard(cfg, outcome.offer, outcome.status));
     }
 
     if (ns === 'duel') {
       if (!checkButtonOwner(interaction, allowedId)) return;
-      const challenge = economy.getDuelChallenge(allowedId);
+      if (action !== 'accept' && action !== 'decline') return;
+      // El reto se reclama (y se elimina) en UN solo paso síncrono, antes de cualquier await: un doble
+      // clic o un clic junto a la expiración nunca resuelve dos veces el mismo duelo.
+      const challenge = economy.claimDuelChallenge(allowedId);
       if (!challenge) {
-        return interaction.editReply(ui.errorCard(cfg, 'Este reto ya no existe', 'Puede que haya expirado o ya se haya respondido.'));
+        return replyButton(interaction, ephemeralPayload(ui.errorCard(cfg, 'Este reto ya no existe', 'Puede que haya expirado o ya se haya respondido.')));
       }
       if (action === 'decline') {
-        economy.cancelDuelChallenge(allowedId);
         return interaction.editReply(ui.infoCard(cfg, 'Duelo rechazado', `${interaction.member.displayName} decidió no pelear.`));
       }
-      if (action === 'accept') {
-        const { challengerId, bet } = challenge;
-        const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
-        if (!challengerMember) {
-          economy.cancelDuelChallenge(allowedId);
-          return interaction.editReply(ui.infoCard(cfg, 'Duelo cancelado', 'No pude cargar el perfil del retador; no se descontó la apuesta.'));
-        }
-
-        const challengerData = db.getUser(challengerId);
-        const targetData = db.getUser(allowedId);
-        const result = economy.resolveDuel(challengerData, challengerId, targetData, allowedId, bet);
-        if (result.error) {
-          economy.cancelDuelChallenge(allowedId);
-          return interaction.editReply(ui.errorCard(cfg, 'No se pudo realizar el duelo', result.error === 'balance_limit'
-            ? 'El premio excedería el límite seguro de saldo.'
-            : 'Alguno de los dos ya no tiene suficiente Cash.'));
-        }
-        const narration = cfg.DUEL_NARRATIONS[Math.floor(Math.random() * cfg.DUEL_NARRATIONS.length)];
-        await interaction.editReply(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, 0));
-        for (const frame of [1, 2]) {
-          await new Promise((resolve) => setTimeout(resolve, 650));
-          await interaction.message.edit(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, frame)).catch(() => {});
-        }
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        return interaction.message.edit(ui.duelResultCard(
-          cfg,
-          challengerMember,
-          interaction.member,
-          result,
-          `${narration}${activityNotice(result.winnerActivity)}`,
-        )).catch(() => {});
+      const { challengerId, bet } = challenge;
+      const challengerMember = await interaction.guild.members.fetch(challengerId).catch(() => null);
+      if (!challengerMember) {
+        return interaction.editReply(ui.infoCard(cfg, 'Duelo cancelado', 'No pude cargar el perfil del retador; no se descontó la apuesta.'));
       }
+
+      const challengerData = db.getUser(challengerId);
+      const targetData = db.getUser(allowedId);
+      const result = economy.resolveDuel(challengerData, challengerId, targetData, allowedId, bet);
+      if (result.error) {
+        return interaction.editReply(ui.errorCard(cfg, 'No se pudo realizar el duelo', result.error === 'balance_limit'
+          ? 'El premio excedería el límite seguro de saldo.'
+          : 'Alguno de los dos ya no tiene suficiente Cash.'));
+      }
+      const narration = cfg.DUEL_NARRATIONS[Math.floor(Math.random() * cfg.DUEL_NARRATIONS.length)];
+      await interaction.editReply(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, 0));
+      for (const frame of [1, 2]) {
+        await sleep(650);
+        await interaction.message.edit(ui.duelAnimationCard(cfg, challengerMember, interaction.member, bet, narration, frame)).catch(() => {});
+      }
+      await sleep(650);
+      return interaction.message.edit(ui.duelResultCard(
+        cfg,
+        challengerMember,
+        interaction.member,
+        result,
+        `${narration}${activityNotice(result.winnerActivity)}`,
+      )).catch(() => {});
     }
 
     if (ns === 'confirm' && action === 'reset') {
@@ -1188,6 +1435,9 @@ if (process.env.PORT) {
   });
   healthServer.listen(Number(process.env.PORT), '0.0.0.0', () => {
     console.log(`[HTTP] Health check activo en el puerto ${process.env.PORT}`);
+    // Opción de ahorro (apagada por defecto): evita la suspensión del plan Free de Render. Ver docs/COSTOS.md.
+    const keepAliveConfig = keepAlive.resolveKeepAlive();
+    if (keepAliveConfig) keepAlive.startKeepAlive(keepAliveConfig);
   });
 }
 
