@@ -1,5 +1,14 @@
 # Registro de cambios
 
+## 1.1.1
+
+Base: `main` @ `8687aa4` (Xerion 1.1.0).
+
+- **Leaderboard:** los nombres con snowflakes válidos se muestran como menciones visuales de Discord (`<@ID>`), con
+  `allowedMentions: { parse: [] }` y notificaciones suprimidas para no hacer ping. IDs heredados no válidos usan el
+  nombre escapado como texto normal.
+- **Pruebas:** regresión que comprueba ambas menciones silenciosas, el fallback de IDs inválidos y la política anti-ping.
+
 ## 1.1.0
 
 Base: `main` @ `8a8d56a` (v1.0.0 «Halloween Release», 50 comandos). **55 comandos reales** (los alias no cuentan).

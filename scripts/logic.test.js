@@ -576,7 +576,7 @@ test('chat messages no longer earn passive Candys', () => {
   assert.doesNotMatch(indexSource, /economy\.earnFromMessage/);
 });
 
-test('global leaderboard prints names literally without Discord mentions or pings', () => {
+test('global leaderboard renders silent Discord mentions without pinging users', () => {
   const guildMemberId = '123456789012345678';
   const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
@@ -585,10 +585,10 @@ test('global leaderboard prints names literally without Discord mentions or ping
     { id: 'legacy-player', value: 250 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
-  assert.match(rendered, /@Guild Nick/);
-  assert.match(rendered, /@Global Name/);
+  assert.match(rendered, /<@123456789012345678>/);
+  assert.match(rendered, /<@234567890123456789>/);
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, /<@!?[0-9]{17,20}>/);
+  assert.doesNotMatch(rendered, /@Guild Nick|@Global Name/);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });

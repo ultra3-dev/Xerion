@@ -7,7 +7,7 @@ const http = require('http');
 //  ÍNDICE — Cliente de Discord, listeners y los 55 comandos.
 //  Prefijo: "xn" (sin distinguir mayúsculas). Toda la lógica de
 //  economía vive en economy.js; todo el render en ui.js.
-//  v1.1.0
+//  v1.1.1
 // ============================================================
 
 const {
