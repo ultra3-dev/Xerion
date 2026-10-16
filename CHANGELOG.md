@@ -1,5 +1,14 @@
 # Registro de cambios
 
+## 1.1.3
+
+Base: `main` @ `3e56581` (Xerion 1.1.2).
+
+- **Leaderboard:** conserva el formato de mención silenciosa para perfiles de Discord disponibles en caché o resueltos por API.
+- Solo cambia a nombre de texto cuando Discord no encuentra la cuenta; se mantienen `allowedMentions: { parse: [] }` y
+  la supresión de notificaciones.
+- **Pruebas:** cobertura para mención de perfiles resueltos, fallback de cuentas no disponibles y consultas limitadas a la página visible.
+
 ## 1.1.2
 
 Base: `main` @ `eb33794` (Xerion 1.1.1).

@@ -23,6 +23,7 @@ async function resolveLeaderboardEntries(entries, {
     const member = guild?.members?.cache?.get(id) || null;
     let user = users?.cache?.get(id) || member?.user || null;
     const savedName = usableName(getSavedName(id));
+    let isMentionResolvable = Boolean(member || usableName(user?.globalName) || usableName(user?.username));
     const findName = () => [
       member?.displayName,
       user?.globalName,
@@ -32,10 +33,11 @@ async function resolveLeaderboardEntries(entries, {
     ].map(usableName).find(Boolean) || '';
 
     let displayName = findName();
-    if (!displayName && /^\d{17,20}$/.test(id) && typeof fetchUser === 'function') {
+    if (!member && !isMentionResolvable && /^\d{17,20}$/.test(id) && typeof fetchUser === 'function') {
       try {
         user = await fetchUser(id);
         displayName = findName();
+        isMentionResolvable = Boolean(usableName(user?.globalName) || usableName(user?.username));
       } catch {
         // A deleted or unavailable Discord account must not break the leaderboard.
       }
@@ -44,6 +46,7 @@ async function resolveLeaderboardEntries(entries, {
     resolvedNames.set(id, {
       displayName: displayName || (/^\d{17,20}$/.test(id) ? `Usuario ${id.slice(-4)}` : 'Jugador sin nombre'),
       isGuildMember: Boolean(member),
+      isMentionResolvable,
     });
   }));
 

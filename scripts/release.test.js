@@ -26,19 +26,19 @@ function projectFiles(dir = root, found = []) {
 
 // ---------- Versión ----------
 
-test('every current version marker says 1.1.2 and the stale 1.0.0 / 50-command wording is gone', () => {
-  assert.equal(cfg.BOT_VERSION, '1.1.2');
-  assert.equal(json('package.json').version, '1.1.2');
+test('every current version marker says 1.1.3 and the stale 1.0.0 / 50-command wording is gone', () => {
+  assert.equal(cfg.BOT_VERSION, '1.1.3');
+  assert.equal(json('package.json').version, '1.1.3');
   const lock = json('package-lock.json');
-  assert.equal(lock.version, '1.1.2');
-  assert.equal(lock.packages[''].version, '1.1.2');
+  assert.equal(lock.version, '1.1.3');
+  assert.equal(lock.packages[''].version, '1.1.3');
   const readme = read('README.md');
-  assert.match(readme, /v1\.1\.2/);
+  assert.match(readme, /v1\.1\.3/);
   assert.match(readme, /55 comandos/);
-  assert.match(read('CHANGELOG.md'), /^## 1\.1\.2/m);
+  assert.match(read('CHANGELOG.md'), /^## 1\.1\.3/m);
   assert.match(read('index.js'), /los 55 comandos/);
   assert.match(read('ui.js'), /55 comandos en total/);
-  assert.match(read('config.js'), /v1\.1\.2/);
+  assert.match(read('config.js'), /v1\.1\.3/);
   for (const file of ['README.md', 'index.js', 'ui.js', 'config.js']) {
     assert.ok(!/50 comandos/.test(read(file)), `${file} still mentions 50 commands`);
   }

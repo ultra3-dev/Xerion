@@ -25,14 +25,14 @@ const QUEST_MISSIONS = QUEST_ACTIONS.flatMap((action) => QUEST_TARGETS.map((targ
 
 // ============================================================
 //  CONFIGURACIÓN GENERAL — Bot de Economía de Halloween (Xn)
-//  v1.1.2 — resolución de nombres en el leaderboard (base: v1.1.1, 55 comandos).
+//  v1.1.3 — menciones silenciosas para perfiles resueltos (base: v1.1.2, 55 comandos).
 //  Todos los números de esta economía viven aquí. Ajusta con
 //  confianza: nada del resto del código depende de valores
 //  "mágicos" fuera de este archivo.
 // ============================================================
 
 module.exports = {
-  BOT_VERSION: '1.1.2',
+  BOT_VERSION: '1.1.3',
 
   // --- Prefijo (se detecta sin importar mayúsculas: Xn, xn, xN, XN) ---
   PREFIX: 'xn',

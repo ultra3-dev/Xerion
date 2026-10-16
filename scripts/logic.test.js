@@ -580,16 +580,17 @@ test('global leaderboard renders silent Discord mentions without pinging users',
   const guildMemberId = '123456789012345678';
   const globalUserId = '234567890123456789';
   const view = ui.leaderboardContainer(cfg, 'rich', 0, [
-    { id: guildMemberId, displayName: 'Guild Nick', isGuildMember: true, value: 500 },
-    { id: globalUserId, displayName: 'Global Name', isGuildMember: false, value: 300 },
-    { id: 'legacy-player', value: 250 },
+    { id: guildMemberId, displayName: 'Guild Nick', isGuildMember: true, isMentionResolvable: true, value: 500 },
+    { id: globalUserId, displayName: 'Global Name', isGuildMember: false, isMentionResolvable: true, value: 300 },
+    { id: '345678901234567890', displayName: 'Saved User', isGuildMember: false, isMentionResolvable: false, value: 250 },
+    { id: 'legacy-player', value: 200 },
   ], 'viewer');
   const rendered = JSON.stringify(view);
   assert.match(rendered, /<@123456789012345678>/);
-  assert.match(rendered, /@Global Name/);
-  assert.doesNotMatch(rendered, /<@234567890123456789>/);
+  assert.match(rendered, /<@234567890123456789>/);
+  assert.match(rendered, /@Saved User/);
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, /@Guild Nick/);
+  assert.doesNotMatch(rendered, /@Guild Nick|@Global Name/);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });
@@ -615,9 +616,12 @@ test('leaderboard resolves visible names from cache and storage without REST req
   });
   assert.equal(resolved[0].displayName, 'Guild Nick');
   assert.equal(resolved[0].isGuildMember, true);
+  assert.equal(resolved[0].isMentionResolvable, true);
   assert.equal(resolved[1].displayName, 'Global Name');
   assert.equal(resolved[1].isGuildMember, false);
+  assert.equal(resolved[1].isMentionResolvable, true);
   assert.equal(resolved[2].displayName, 'Saved Name');
+  assert.equal(resolved[2].isMentionResolvable, false);
   assert.deepEqual(resolved[3], entries[3]);
   assert.equal(savedNameCalls, 3);
 });
@@ -638,13 +642,16 @@ test('leaderboard fetches only missing visible names and replaces unavailable na
     fetchUser: async (id) => {
       fetchedIds.push(id);
       if (id === unavailableId) throw new Error('user unavailable');
-      return { username: 'Fetched Name' };
+      return { username: id === savedId ? 'Fetched Saved Name' : 'Fetched Name' };
     },
   });
-  assert.deepEqual(fetchedIds, [fetchedId, unavailableId]);
+  assert.deepEqual(fetchedIds, [fetchedId, savedId, unavailableId]);
   assert.equal(resolved[0].displayName, 'Fetched Name');
-  assert.equal(resolved[1].displayName, 'Saved Name');
+  assert.equal(resolved[0].isMentionResolvable, true);
+  assert.equal(resolved[1].displayName, 'Fetched Saved Name');
+  assert.equal(resolved[1].isMentionResolvable, true);
   assert.equal(resolved[2].displayName, 'Usuario 7890');
+  assert.equal(resolved[2].isMentionResolvable, false);
   assert.deepEqual(resolved[3], entries[3]);
 });
 test('Discord message and interaction IDs are processed at most once per process', async () => {

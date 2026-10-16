@@ -1,10 +1,10 @@
-# 🍬 Halloween Economy Bot (Xn) — v1.1.2
+# 🍬 Halloween Economy Bot (Xn) — v1.1.3
 
 Bot de Discord de economía de Halloween con RPG, casino y **55 comandos**. Usa Components V2 y el prefijo `xn`
-(no distingue mayúsculas). Base: v1.1.1 (`main` en el commit `eb33794`).
+(no distingue mayúsculas). Base: v1.1.2 (`main` en el commit `3e56581`).
 
-**v1.1.2:** el leaderboard conserva la mención visual silenciosa para miembros resolubles del servidor; para otros usuarios,
-resuelve el nombre desde la caché o Discord y lo muestra como texto, evitando la etiqueta `Unknown User`.
+**v1.1.3:** el leaderboard conserva la mención visual silenciosa cuando Discord o el servidor resuelven el perfil; solo
+usa el nombre como texto cuando la API no encuentra la cuenta.
 
 ## Instalación local
 
@@ -176,4 +176,4 @@ conservación y fuzz), XP, owner/rankings, inventario, blackjack, casino, events
 | `ui.js` | Mensajes Components V2, menús y botones |
 | `index.js` | Cliente Discord, listeners y comandos |
 | `dashboard.js` | Dashboard privado, gestión de códigos y confirmación de reinicio |
-| `docs/` | Comercio (`TRADING.md`), canvas (`CANVAS.md`), costos (`COSTOS.md`) y auditorías (`AUDITORIA-1.1.0.md`, `AUDITORIA-1.1.1.md`, `AUDITORIA-1.1.2.md`) |
+| `docs/` | Comercio (`TRADING.md`), canvas (`CANVAS.md`), costos (`COSTOS.md`) y auditorías (`AUDITORIA-1.1.0.md`–`AUDITORIA-1.1.3.md`) |
