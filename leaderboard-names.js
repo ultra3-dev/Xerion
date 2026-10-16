@@ -1,26 +1,51 @@
 'use strict';
 
-function resolveLeaderboardEntries(entries, {
+function usableName(value) {
+  if (typeof value !== 'string') return '';
+  const name = value.trim();
+  return name && !/^unknown[\s_-]+user$/i.test(name) ? name : '';
+}
+
+async function resolveLeaderboardEntries(entries, {
   guild,
   users,
   page = 0,
   pageSize = 10,
   getSavedName = () => '',
+  fetchUser,
 } = {}) {
   const safePage = Number.isFinite(page) ? Math.max(0, Math.trunc(page)) : 0;
   const visibleEntries = entries.slice(safePage * pageSize, (safePage + 1) * pageSize);
   const resolvedNames = new Map();
 
-  for (const entry of visibleEntries) {
+  await Promise.all(visibleEntries.map(async (entry) => {
     const id = String(entry.id || '');
     const member = guild?.members?.cache?.get(id) || null;
-    const user = users?.cache?.get(id) || member?.user || null;
-    const savedName = getSavedName(id);
+    let user = users?.cache?.get(id) || member?.user || null;
+    const savedName = usableName(getSavedName(id));
+    const findName = () => [
+      member?.displayName,
+      user?.globalName,
+      user?.username,
+      savedName,
+      entry.displayName,
+    ].map(usableName).find(Boolean) || '';
+
+    let displayName = findName();
+    if (!displayName && /^\d{17,20}$/.test(id) && typeof fetchUser === 'function') {
+      try {
+        user = await fetchUser(id);
+        displayName = findName();
+      } catch {
+        // A deleted or unavailable Discord account must not break the leaderboard.
+      }
+    }
+
     resolvedNames.set(id, {
-      displayName: member?.displayName || user?.globalName || user?.username || savedName || entry.displayName || 'Jugador sin nombre',
+      displayName: displayName || (/^\d{17,20}$/.test(id) ? `Usuario ${id.slice(-4)}` : 'Jugador sin nombre'),
       isGuildMember: Boolean(member),
     });
-  }
+  }));
 
   return entries.map((entry) => {
     const resolved = resolvedNames.get(String(entry.id || ''));

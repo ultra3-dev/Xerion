@@ -7,7 +7,7 @@ const http = require('http');
 //  ÍNDICE — Cliente de Discord, listeners y los 55 comandos.
 //  Prefijo: "xn" (sin distinguir mayúsculas). Toda la lógica de
 //  economía vive en economy.js; todo el render en ui.js.
-//  v1.1.1
+//  v1.1.2
 // ============================================================
 
 const {
@@ -825,18 +825,19 @@ commands.inventory = async (message, args, member, dbUser) => {
 
 // ---------- Información ----------
 
-function leaderboardEntriesForGuild(entries, guild, page = 0) {
+async function leaderboardEntriesForGuild(entries, guild, page = 0) {
   return resolveLeaderboardEntries(entries, {
     guild,
     users: client.users,
     page,
     pageSize: 10,
     getSavedName: (id) => db.getUser(id).displayName,
+    fetchUser: (id) => client.users.fetch(id),
   });
 }
 
 commands.leaderboard = async (message) => {
-  const entries = leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild, 0);
+  const entries = await leaderboardEntriesForGuild(economy.getLeaderboard(100), message.guild, 0);
   return message.channel.send(ui.leaderboardContainer(cfg, 'rich', 0, entries, message.author.id));
 };
 
@@ -1196,7 +1197,7 @@ client.on('interactionCreate', async (interaction) => {
         page = 0;
       }
       const entries = mode === 'debt' ? economy.getDebtLeaderboard(100) : economy.getLeaderboard(100);
-      const resolvedEntries = leaderboardEntriesForGuild(entries, interaction.guild, page);
+      const resolvedEntries = await leaderboardEntriesForGuild(entries, interaction.guild, page);
       return interaction.editReply(ui.leaderboardContainer(cfg, mode, page, resolvedEntries, allowedId));
     }
 

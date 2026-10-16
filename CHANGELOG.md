@@ -1,5 +1,15 @@
 # Registro de cambios
 
+## 1.1.2
+
+Base: `main` @ `eb33794` (Xerion 1.1.1).
+
+- **Leaderboard:** solo los miembros del servidor que Discord puede resolver conservan la mención azul silenciosa.
+- Los nombres faltantes se buscan en la caché o mediante la API de usuario de Discord, únicamente para la página visible
+  (máximo 10 entradas). Si Discord no puede resolver una cuenta, se muestra `Usuario` más los últimos 4 dígitos del ID.
+- No se permiten pings y no se escribe este dato adicional en la base de datos.
+- **Pruebas:** cobertura para nombre obtenido por API, nombre guardado, cuenta no disponible, paginación y política anti-ping.
+
 ## 1.1.1
 
 Base: `main` @ `8687aa4` (Xerion 1.1.0).

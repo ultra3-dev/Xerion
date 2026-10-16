@@ -586,14 +586,15 @@ test('global leaderboard renders silent Discord mentions without pinging users',
   ], 'viewer');
   const rendered = JSON.stringify(view);
   assert.match(rendered, /<@123456789012345678>/);
-  assert.match(rendered, /<@234567890123456789>/);
+  assert.match(rendered, /@Global Name/);
+  assert.doesNotMatch(rendered, /<@234567890123456789>/);
   assert.match(rendered, /@Jugador sin nombre/);
-  assert.doesNotMatch(rendered, /@Guild Nick|@Global Name/);
+  assert.doesNotMatch(rendered, /@Guild Nick/);
   assert.deepEqual(view.allowedMentions, { parse: [] });
   assert.ok((view.flags & MessageFlags.SuppressNotifications) !== 0);
 });
 
-test('leaderboard resolves visible names from cache and storage without REST requests', () => {
+test('leaderboard resolves visible names from cache and storage without REST requests', async () => {
   const memberId = '123456789012345678';
   const globalId = '234567890123456789';
   const savedId = '345678901234567890';
@@ -605,7 +606,7 @@ test('leaderboard resolves visible names from cache and storage without REST req
     { id: savedId, value: 200 },
     { id: laterPageId, value: 100 },
   ];
-  const resolved = resolveLeaderboardEntries(entries, {
+  const resolved = await resolveLeaderboardEntries(entries, {
     guild: { members: { cache: new Map([[memberId, { displayName: 'Guild Nick' }]]), fetch: () => assert.fail('must not fetch guild members') } },
     users: { cache: new Map([[globalId, { globalName: 'Global Name' }]]), fetch: () => assert.fail('must not fetch Discord users') },
     page: 0,
@@ -619,6 +620,32 @@ test('leaderboard resolves visible names from cache and storage without REST req
   assert.equal(resolved[2].displayName, 'Saved Name');
   assert.deepEqual(resolved[3], entries[3]);
   assert.equal(savedNameCalls, 3);
+});
+
+test('leaderboard fetches only missing visible names and replaces unavailable names with a safe fallback', async () => {
+  const fetchedId = '123456789012345678';
+  const savedId = '234567890123456789';
+  const unavailableId = '345678901234567890';
+  const laterPageId = '456789012345678901';
+  const entries = [fetchedId, savedId, unavailableId, laterPageId].map((id) => ({ id, value: 100 }));
+  const fetchedIds = [];
+  const resolved = await resolveLeaderboardEntries(entries, {
+    guild: { members: { cache: new Map() } },
+    users: { cache: new Map() },
+    page: 0,
+    pageSize: 3,
+    getSavedName: (id) => (id === savedId ? 'Saved Name' : ''),
+    fetchUser: async (id) => {
+      fetchedIds.push(id);
+      if (id === unavailableId) throw new Error('user unavailable');
+      return { username: 'Fetched Name' };
+    },
+  });
+  assert.deepEqual(fetchedIds, [fetchedId, unavailableId]);
+  assert.equal(resolved[0].displayName, 'Fetched Name');
+  assert.equal(resolved[1].displayName, 'Saved Name');
+  assert.equal(resolved[2].displayName, 'Usuario 7890');
+  assert.deepEqual(resolved[3], entries[3]);
 });
 test('Discord message and interaction IDs are processed at most once per process', async () => {
   const eventId = '1430000000000000000';

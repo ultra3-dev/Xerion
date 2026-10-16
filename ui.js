@@ -576,7 +576,7 @@ function leaderboardContainer(cfg, mode, page, allEntries, invokerId) {
         .replace(/^@+/, '')
         .replace(/@/g, '@\u200b');
       const userId = String(e.id || '');
-      const userLabel = /^\d{17,20}$/.test(userId) ? `<@${userId}>` : `@${displayName}`;
+      const userLabel = e.isGuildMember && /^\d{17,20}$/.test(userId) ? `<@${userId}>` : `@${displayName}`;
       return `${marker} **${userLabel}** — **${db.fmt(e.value)}**${cfg.CANDY_EMOJI} ${valueLabel}`;
     });
     c.addTextDisplayComponents(text(lines.join('\n')));
